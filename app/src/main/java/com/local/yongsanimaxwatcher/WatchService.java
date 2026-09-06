@@ -25,7 +25,8 @@ public final class WatchService extends Service {
     private NotificationHelper notifications;
     private PowerManager.WakeLock wakeLock;
 
-    private final int[] offsetPattern = {1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7};
+    // 기존에 열린 날짜의 취소표도 자주 확인하고, 그 사이에 최신 날짜 이후도 순환 확인한다.
+    private final int[] offsetPattern = {0, 1, 0, 2, 0, 3, 1, 4, 0, 5, 1, 6, 2, 7};
     private int patternIndex = 0;
 
     @Override
@@ -74,9 +75,8 @@ public final class WatchService extends Service {
 
     private void runLoop() {
         try {
-            if (prefs.getLatestDate().isEmpty()) {
-                initializeBaseline();
-            }
+            if (prefs.getLatestDate().isEmpty()) initializeBaseline();
+
             while (running.get()) {
                 checkOneDate();
                 int interval = Math.max(30, prefs.getIntervalSeconds());
@@ -98,9 +98,9 @@ public final class WatchService extends Service {
     }
 
     private void initializeBaseline() throws Exception {
-        prefs.setStatus("현재 마지막 IMAX 날짜 찾는 중...");
+        prefs.setStatus("현재 IMAX 일정/좌석 기준 만드는 중...");
         notifications.updateForeground(
-                notifications.foreground("첫 실행: 현재 열린 마지막 날짜 확인 중"));
+                notifications.foreground("첫 실행: 현재 일정과 좌석 기준 확인 중"));
 
         LocalDate today = DateUtil.today();
         String latest = "";
@@ -112,10 +112,8 @@ public final class WatchService extends Service {
             try {
                 List<CgvClient.Showtime> matches = cgv.fetchMatches(d);
                 success++;
-                if (!matches.isEmpty()) {
-                    latest = d;
-                    prefs.setStatus("기준 확인: " + DateUtil.pretty(d) + " IMAX 있음");
-                }
+                if (!matches.isEmpty()) latest = d;
+                snapshot(matches);
             } catch (Exception e) {
                 last = e;
             }
@@ -128,48 +126,61 @@ public final class WatchService extends Service {
                             + (last == null ? "" : shortMsg(last)));
         }
 
-        if (latest.isEmpty()) {
-            // 기존 일정을 못 찾은 경우 오늘을 기준으로 잡아 기존 회차 오탐을 줄인다.
-            latest = DateUtil.ymd(today);
-        }
-
+        if (latest.isEmpty()) latest = DateUtil.ymd(today);
         prefs.setLatestDate(latest);
         prefs.setStatus("기준 설정 완료: " + DateUtil.pretty(latest));
         notifications.updateForeground(
-                notifications.foreground("기준 " + DateUtil.pretty(latest)
-                        + " · 새 날짜 대기 중"));
+                notifications.foreground("새 날짜 + 취소표 감시 중 · 기준 " + DateUtil.pretty(latest)));
+    }
+
+    private void snapshot(List<CgvClient.Showtime> matches) {
+        for (CgvClient.Showtime s : matches) {
+            if (s.freeSeats >= 0) prefs.setSeatCount(s.key(), s.freeSeats);
+        }
     }
 
     private void checkOneDate() {
         try {
             String latestText = prefs.getLatestDate();
-            LocalDate latest = latestText.isEmpty()
-                    ? DateUtil.today()
-                    : DateUtil.parseYmd(latestText);
-
-            LocalDate floor = DateUtil.today().minusDays(1);
-            LocalDate base = latest.isBefore(floor) ? floor : latest;
+            LocalDate latest = latestText.isEmpty() ? DateUtil.today() : DateUtil.parseYmd(latestText);
+            LocalDate today = DateUtil.today();
 
             int offset = offsetPattern[patternIndex++ % offsetPattern.length];
-            LocalDate candidate = base.plusDays(offset);
-            String date = DateUtil.ymd(candidate);
+            LocalDate candidate;
+            if (offset <= 2) {
+                candidate = today.plusDays(offset);
+            } else {
+                LocalDate floor = latest.isBefore(today) ? today : latest;
+                candidate = floor.plusDays(offset - 2L);
+            }
 
+            String date = DateUtil.ymd(candidate);
             List<CgvClient.Showtime> matches = cgv.fetchMatches(date);
             prefs.setLastChecked(DateUtil.nowStamp());
             prefs.setConsecutiveErrors(0);
 
-            if (!matches.isEmpty() && candidate.isAfter(latest)) {
+            boolean isNewDate = !matches.isEmpty() && candidate.isAfter(latest);
+            if (isNewDate) {
                 notifyNewDate(date, matches);
                 prefs.setLatestDate(date);
                 patternIndex = 0;
-            } else {
-                String baseline = prefs.getLatestDate();
-                String status = "정상 감시 중 · 기준 "
-                        + (baseline.isEmpty() ? "-" : DateUtil.pretty(baseline))
-                        + " · 방금 " + DateUtil.pretty(date) + " 확인";
-                prefs.setStatus(status);
-                notifications.updateForeground(notifications.foreground(status));
             }
+
+            for (CgvClient.Showtime s : matches) {
+                if (s.freeSeats < 0) continue;
+                int old = prefs.getSeatCount(s.key());
+                if (old != Integer.MIN_VALUE && s.freeSeats > old) {
+                    notifySeatIncrease(s, old, s.freeSeats);
+                }
+                prefs.setSeatCount(s.key(), s.freeSeats);
+            }
+
+            String baseline = prefs.getLatestDate();
+            String status = "정상 감시 중 · 새 날짜+취소표 · 기준 "
+                    + (baseline.isEmpty() ? "-" : DateUtil.pretty(baseline))
+                    + " · 방금 " + DateUtil.pretty(date) + " 확인";
+            prefs.setStatus(status);
+            notifications.updateForeground(notifications.foreground(status));
         } catch (Exception e) {
             int errors = prefs.getConsecutiveErrors() + 1;
             prefs.setConsecutiveErrors(errors);
@@ -178,15 +189,29 @@ public final class WatchService extends Service {
             notifications.updateForeground(
                     notifications.foreground("조회 실패 · 자동 재시도 중"));
 
-            // 일시적 403/429/네트워크 오류는 계속 재시도한다.
             if (errors == 5 || errors == 20) {
                 notifications.alert(
                         "용아맥 알리미 조회 지연",
-                        "CGV 조회가 연속 " + errors + "회 실패했어. "
-                                + "네트워크나 CGV 페이지 변경 가능성이 있어.\n"
+                        "CGV 조회가 연속 " + errors + "회 실패했어. 네트워크나 CGV 페이지 변경 가능성이 있어.\n"
                                 + shortMsg(e),
                         9100 + errors);
             }
+        }
+    }
+
+    private void notifySeatIncrease(CgvClient.Showtime s, int oldSeats, int newSeats) {
+        int added = newSeats - oldSeats;
+        String pretty = DateUtil.pretty(s.date);
+        String title = "🎟️ 용아맥 취소표/새 자리 " + added + "석!";
+        String body = pretty + " " + s.time + " · " + s.hall
+                + "\n잔여 " + oldSeats + " → " + newSeats + "석\n지금 바로 예매 화면을 확인해.";
+        notifications.alert(title, body, 4000 + Math.abs(s.key().hashCode() % 4000));
+        prefs.setStatus("새 자리 발견! " + pretty + " " + s.time + " · " + newSeats + "석");
+
+        try {
+            kakao.sendMemo(title + "\n" + body);
+        } catch (Exception ignored) {
+            // 폰 알림이 핵심이므로 카카오 전송 실패는 감시를 중단하지 않는다.
         }
     }
 
@@ -196,30 +221,18 @@ public final class WatchService extends Service {
             if (s.time == null || s.time.isEmpty()) continue;
             if (times.length() > 0) times.append(", ");
             if (times.indexOf(s.time) < 0) times.append(s.time);
-            if (times.length() > 70) break;
+            if (times.length() > 90) break;
         }
 
         String pretty = DateUtil.pretty(date);
         String timeText = times.length() == 0 ? "회차 확인 필요" : times.toString();
-
         String title = "🚨 용아맥 오디세이 IMAX 새 날짜!";
         String body = pretty + "  " + timeText + "\n지금 CGV 예매를 확인해.";
         notifications.alert(title, body, 2000 + Math.abs(date.hashCode() % 5000));
 
-        prefs.setStatus("새 날짜 발견! " + pretty);
-        notifications.updateForeground(
-                notifications.foreground("새 날짜 발견 " + pretty + " · 계속 감시 중"));
-
         try {
             kakao.sendMemo(title + "\n" + body);
-        } catch (Exception e) {
-            // 카톡이 실패해도 핵심인 폰 알림은 이미 전송됨.
-            notifications.alert(
-                    "카톡 전송 실패",
-                    "폰 알림은 정상적으로 울렸어. 카카오 로그인을 다시 확인해줘.\n"
-                            + shortMsg(e),
-                    9201);
-        }
+        } catch (Exception ignored) {}
     }
 
     private void sleepInterruptibly(long ms) {
