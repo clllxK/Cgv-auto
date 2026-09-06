@@ -15,7 +15,6 @@ import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.text.InputType;
-import android.view.Gravity;
 import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -32,6 +31,10 @@ public final class MainActivity extends Activity {
     private KakaoClient kakao;
     private TextView status;
     private TextView detail;
+    private EditText theaterName;
+    private EditText siteNo;
+    private EditText movieKeyword;
+    private EditText formatKeyword;
     private EditText restKey;
     private EditText clientSecret;
     private Spinner interval;
@@ -39,8 +42,7 @@ public final class MainActivity extends Activity {
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     private final Runnable refresher = new Runnable() {
-        @Override
-        public void run() {
+        @Override public void run() {
             refreshStatus();
             ui.postDelayed(this, 1000);
         }
@@ -52,7 +54,6 @@ public final class MainActivity extends Activity {
         prefs = new Prefs(this);
         kakao = new KakaoClient(this);
         new NotificationHelper(this);
-
         requestNotificationPermission();
         setContentView(buildUi());
         ui.post(refresher);
@@ -60,17 +61,13 @@ public final class MainActivity extends Activity {
 
     private View buildUi() {
         int pad = dp(18);
-
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(pad, pad, pad, pad);
         root.setBackgroundColor(Color.rgb(246, 246, 246));
 
-        TextView title = text("용아맥 오디세이 알리미", 26, true);
-        root.addView(title);
-
-        TextView subtitle = text(
-                "용산아이파크몰 · 오디세이 · IMAX 새 날짜가 열리면 즉시 알려줘.", 14, false);
+        root.addView(text("CGV 예매 알리미", 26, true));
+        TextView subtitle = text("원하는 CGV 극장과 영화를 지정하면 새 날짜와 취소표를 감시해.", 14, false);
         subtitle.setTextColor(Color.DKGRAY);
         root.addView(subtitle, lpTop(6));
 
@@ -82,7 +79,44 @@ public final class MainActivity extends Activity {
         card.addView(detail, lpTop(8));
         root.addView(card, lpTop(18));
 
-        root.addView(section("1. 카카오 연결"), lpTop(22));
+        root.addView(section("1. 감시 대상"), lpTop(22));
+
+        theaterName = input("CGV 극장명 (예: 용산아이파크몰)", false);
+        theaterName.setText(prefs.getTheaterName());
+        root.addView(theaterName, lpTop(8));
+
+        siteNo = input("CGV 극장 코드 4자리 (예: 0013)", false);
+        siteNo.setInputType(InputType.TYPE_CLASS_NUMBER);
+        siteNo.setText(prefs.getSiteNo());
+        root.addView(siteNo, lpTop(8));
+
+        movieKeyword = input("영화명 (빈칸 = 모든 영화)", false);
+        movieKeyword.setText(prefs.getMovieKeyword());
+        root.addView(movieKeyword, lpTop(8));
+
+        formatKeyword = input("포맷/특별관 (예: IMAX, 4DX / 빈칸 = 전체)", false);
+        formatKeyword.setText(prefs.getFormatKeyword());
+        root.addView(formatKeyword, lpTop(8));
+
+        Button saveTarget = button("감시 대상 저장");
+        saveTarget.setOnClickListener(v -> {
+            if (saveTarget()) toast("감시 대상을 저장했어. 대상이 바뀌면 기준 좌석도 자동 초기화돼.");
+        });
+        root.addView(saveTarget, lpTop(8));
+
+        Button findCode = button("CGV 극장 코드 확인하기");
+        findCode.setOnClickListener(v -> startActivity(new Intent(Intent.ACTION_VIEW,
+                Uri.parse("https://cgv.co.kr/cnm/movieBook/cinema"))));
+        root.addView(findCode, lpTop(8));
+
+        TextView targetGuide = text(
+                "극장 코드는 CGV 극장별 예매 주소의 siteNo= 뒤 4자리야. "
+                        + "예: 용산아이파크몰 0013 · 왕십리 0074 · 영등포 0059 · 강남 0056. "
+                        + "영화명을 비우면 해당 극장의 모든 영화 취소표/새 날짜를 감시해.", 13, false);
+        targetGuide.setTextColor(Color.DKGRAY);
+        root.addView(targetGuide, lpTop(10));
+
+        root.addView(section("2. 카카오 연결"), lpTop(24));
 
         restKey = input("Kakao REST API 키", false);
         restKey.setText(kakao.getRestKey());
@@ -108,26 +142,16 @@ public final class MainActivity extends Activity {
         root.addView(login, lpTop(8));
 
         Button test = button("카카오톡 테스트 보내기");
-        test.setOnClickListener(v ->
-                kakao.sendTestAsync(this, (ok, msg) -> showResult(ok ? "성공" : "실패", msg)));
+        test.setOnClickListener(v -> kakao.sendTestAsync(this,
+                (ok, msg) -> showResult(ok ? "성공" : "실패", msg)));
         root.addView(test, lpTop(8));
 
-        TextView kakaoGuide = text(
-                "카카오디벨로퍼스에서 먼저:\n"
-                        + "• 카카오 로그인 ON\n"
-                        + "• REST API 키의 Redirect URI에 " + KakaoClient.REDIRECT_URI + " 등록\n"
-                        + "• 동의항목에서 talk_message(카카오톡 메시지 전송) 사용\n"
-                        + "• 제품 링크 관리 → 웹 도메인에 https://cgv.co.kr 등록\n"
-                        + "• REST API 키와 Client Secret을 위에 입력", 13, false);
-        kakaoGuide.setTextColor(Color.DKGRAY);
-        root.addView(kakaoGuide, lpTop(10));
-
-        root.addView(section("2. 감시 설정"), lpTop(24));
+        root.addView(section("3. 감시 실행"), lpTop(24));
 
         interval = new Spinner(this);
         String[] labels = {"30초 (가장 빠름 · 배터리 사용↑)", "1분", "2분"};
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(
-                this, android.R.layout.simple_spinner_dropdown_item, labels);
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_dropdown_item, labels);
         interval.setAdapter(adapter);
         int current = prefs.getIntervalSeconds();
         interval.setSelection(current == 120 ? 2 : current == 60 ? 1 : 0);
@@ -148,10 +172,10 @@ public final class MainActivity extends Activity {
         battery.setOnClickListener(v -> requestBatteryExemption());
         root.addView(battery, lpTop(8));
 
-        Button reset = button("현재 기준 날짜 다시 잡기");
+        Button reset = button("현재 일정/좌석 기준 다시 잡기");
         reset.setOnClickListener(v -> new AlertDialog.Builder(this)
-                .setTitle("기준 날짜 초기화")
-                .setMessage("다음 감시 시작 때 현재 열려 있는 마지막 오디세이 IMAX 날짜를 다시 찾아. 기존 일정으로 알림은 보내지 않아.")
+                .setTitle("기준 초기화")
+                .setMessage("다음 감시 시작 때 현재 일정과 잔여 좌석을 다시 기준으로 잡아. 기존 좌석으로 오탐 알림이 가는 걸 막아줘.")
                 .setPositiveButton("초기화", (d, w) -> {
                     prefs.resetBaseline();
                     toast("초기화했어. 감시를 다시 시작해줘.");
@@ -160,21 +184,40 @@ public final class MainActivity extends Activity {
                 .show());
         root.addView(reset, lpTop(8));
 
-        Button cgv = button("CGV 용산 예매 화면 열기");
-        cgv.setOnClickListener(v ->
-                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(CgvClient.BOOKING_URL))));
+        Button cgv = button("현재 CGV 예매 화면 열기");
+        cgv.setOnClickListener(v -> {
+            saveTarget();
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(
+                    CgvClient.bookingUrl(prefs.getTheaterName(), prefs.getSiteNo()))));
+        });
         root.addView(cgv, lpTop(8));
 
         TextView note = text(
-                "중요: 30초 감시는 화면이 꺼진 상태에서도 CPU를 깨워 두므로 배터리를 더 써. "
-                        + "용아맥 오픈을 기다리는 기간에만 켜두는 걸 권장해. "
-                        + "갤럭시 설정에서도 이 앱의 배터리를 '제한 없음'으로 두면 가장 안정적이야.", 13, false);
+                "빈 영화명 + 빈 포맷으로 두면 그 극장의 모든 영화를 감시할 수 있지만 알림이 많아질 수 있어. "
+                        + "특정 신작만 노릴 때는 영화명을 넣는 게 좋아. 30초 감시는 배터리 사용량도 커져.", 13, false);
         note.setTextColor(Color.DKGRAY);
         root.addView(note, lpTop(14));
 
         ScrollView scroll = new ScrollView(this);
         scroll.addView(root);
         return scroll;
+    }
+
+    private boolean saveTarget() {
+        String tn = theaterName.getText().toString().trim();
+        String sn = siteNo.getText().toString().trim();
+        String mk = movieKeyword.getText().toString().trim();
+        String fk = formatKeyword.getText().toString().trim();
+        if (tn.isEmpty()) {
+            toast("CGV 극장명을 입력해줘.");
+            return false;
+        }
+        if (!sn.matches("\\d{4}")) {
+            toast("극장 코드는 4자리 숫자로 입력해줘. 예: 용산 0013");
+            return false;
+        }
+        prefs.setTarget(tn, sn, mk, fk);
+        return true;
     }
 
     private void toggleWatch() {
@@ -187,8 +230,9 @@ public final class MainActivity extends Activity {
             return;
         }
 
-        int seconds = interval.getSelectedItemPosition() == 2
-                ? 120 : interval.getSelectedItemPosition() == 1 ? 60 : 30;
+        if (!saveTarget()) return;
+        int seconds = interval.getSelectedItemPosition() == 2 ? 120
+                : interval.getSelectedItemPosition() == 1 ? 60 : 30;
         prefs.setIntervalSeconds(seconds);
 
         if (!kakao.hasRefreshToken()) {
@@ -224,20 +268,18 @@ public final class MainActivity extends Activity {
             try { latestPretty = DateUtil.pretty(latest); } catch (Exception ignored) {}
         }
 
-        detail.setText(
-                prefs.getStatus()
-                        + "\n마지막 확인: " + prefs.getLastChecked()
-                        + "\n현재 기준 날짜: " + latestPretty
-                        + "\n카카오: " + (kakao.hasRefreshToken() ? "연결됨" : "로그인 필요")
-                        + "\n간격: " + prefs.getIntervalSeconds() + "초"
-        );
+        detail.setText(prefs.getStatus()
+                + "\n대상: " + prefs.targetLabel()
+                + "\n마지막 확인: " + prefs.getLastChecked()
+                + "\n현재 기준 날짜: " + latestPretty
+                + "\n카카오: " + (kakao.hasRefreshToken() ? "연결됨" : "로그인 필요")
+                + "\n간격: " + prefs.getIntervalSeconds() + "초");
         startStop.setText(watching ? "감시 중지" : "감시 시작");
     }
 
     private void requestNotificationPermission() {
         if (Build.VERSION.SDK_INT >= 33
-                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
-                != PackageManager.PERMISSION_GRANTED) {
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 100);
         }
     }
@@ -288,9 +330,7 @@ public final class MainActivity extends Activity {
         e.setHint(hint);
         e.setSingleLine(true);
         e.setPadding(dp(12), dp(10), dp(12), dp(10));
-        if (password) {
-            e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        }
+        if (password) e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         return e;
     }
 
@@ -304,26 +344,17 @@ public final class MainActivity extends Activity {
 
     private LinearLayout.LayoutParams lpTop(int topDp) {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.topMargin = dp(topDp);
         return lp;
     }
 
-    private int dp(int v) {
-        return Math.round(v * getResources().getDisplayMetrics().density);
-    }
-
-    private void toast(String s) {
-        Toast.makeText(this, s, Toast.LENGTH_LONG).show();
-    }
+    private int dp(int v) { return Math.round(v * getResources().getDisplayMetrics().density); }
+    private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_LONG).show(); }
 
     private void showResult(String title, String message) {
-        new AlertDialog.Builder(this)
-                .setTitle(title)
-                .setMessage(message)
-                .setPositiveButton("확인", null)
-                .show();
+        new AlertDialog.Builder(this).setTitle(title).setMessage(message)
+                .setPositiveButton("확인", null).show();
         refreshStatus();
     }
 
