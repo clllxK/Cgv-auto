@@ -27,6 +27,14 @@ public final class Prefs {
         p.edit().putString("latest_date", value == null ? "" : value).apply();
     }
 
+    public int getSeatCount(String showtimeKey) {
+        return p.getInt("seat_" + showtimeKey, Integer.MIN_VALUE);
+    }
+
+    public void setSeatCount(String showtimeKey, int value) {
+        p.edit().putInt("seat_" + showtimeKey, value).apply();
+    }
+
     public String getLastChecked() {
         return p.getString("last_checked", "-");
     }
@@ -68,6 +76,10 @@ public final class Prefs {
     }
 
     public void resetBaseline() {
-        p.edit().remove("latest_date").apply();
+        SharedPreferences.Editor e = p.edit().remove("latest_date");
+        for (String key : p.getAll().keySet()) {
+            if (key.startsWith("seat_")) e.remove(key);
+        }
+        e.apply();
     }
 }
