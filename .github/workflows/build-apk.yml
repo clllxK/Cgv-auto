@@ -2,6 +2,14 @@ name: Build Android APK
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "build.gradle.kts"
+      - "settings.gradle.kts"
+      - "gradle.properties"
+      - ".github/workflows/build-apk.yml"
 
 jobs:
   build:
@@ -35,5 +43,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: yongsan-imax-odyssey-watcher-apk
+          name: yongsan-imax-seat-date-watcher-apk
           path: app/build/outputs/apk/debug/app-debug.apk
