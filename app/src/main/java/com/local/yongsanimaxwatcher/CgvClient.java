@@ -4,7 +4,6 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -19,7 +18,6 @@ public final class CgvClient {
             "https://cgv.co.kr/cnm/movieBook/cinema?siteNm="
                     + urlEncode("용산아이파크몰") + "&siteNo=0013";
 
-    // 현재 감시 대상으로 사용하는 CGV 상영시간표 조회 엔드포인트. 사이트 구조 변경 시 수정이 필요할 수 있다.
     private static final String API =
             "https://cgv.co.kr/api/v1/booking/searchMovScnInfo";
 
@@ -28,12 +26,20 @@ public final class CgvClient {
         public final String time;
         public final String hall;
         public final String title;
+        public final int freeSeats;
+        public final int totalSeats;
 
-        Showtime(String date, String time, String hall, String title) {
+        Showtime(String date, String time, String hall, String title, int freeSeats, int totalSeats) {
             this.date = date;
             this.time = time;
             this.hall = hall;
             this.title = title;
+            this.freeSeats = freeSeats;
+            this.totalSeats = totalSeats;
+        }
+
+        public String key() {
+            return date + "|" + time + "|" + hall;
         }
     }
 
@@ -72,8 +78,7 @@ public final class CgvClient {
             String format = first(o,
                     "movkndDsplNm", "movKndNm", "formatNm", "specialTypeNm", "screenTypeNm");
 
-            // API 필드명이 변경돼도 IMAX 문자열을 놓치지 않도록 현재 객체의 문자열을 함께 확인.
-            String allStrings = collectStrings(o, 0);
+            String allStrings = collectStrings(o);
             String combined = (hall + " " + format + " " + allStrings).toUpperCase();
             boolean titleMatch = movie.contains(MOVIE) || allStrings.contains(MOVIE);
             boolean formatMatch = combined.contains(FORMAT);
@@ -83,8 +88,12 @@ public final class CgvClient {
                         "scnsrtTm", "scnStartTm", "startTm", "startTime", "scnsrtTime"));
                 String actualHall = hall.isEmpty() ? "IMAX" : hall;
                 String actualMovie = movie.isEmpty() ? MOVIE : movie;
+                int freeSeats = firstInt(o, -1,
+                        "frSeatCnt", "remainSeatCnt", "restSeatCnt", "availableSeatCnt", "seatRemainCnt");
+                int totalSeats = firstInt(o, -1,
+                        "stcnt", "totSeatCnt", "totalSeatCnt", "seatCnt");
                 String key = date + "|" + time + "|" + actualHall;
-                out.put(key, new Showtime(date, time, actualHall, actualMovie));
+                out.put(key, new Showtime(date, time, actualHall, actualMovie, freeSeats, totalSeats));
             }
 
             JSONArray names = o.names();
@@ -107,16 +116,13 @@ public final class CgvClient {
         }
     }
 
-    private String collectStrings(JSONObject o, int depth) {
-        if (depth > 1) return "";
+    private String collectStrings(JSONObject o) {
         StringBuilder sb = new StringBuilder();
         JSONArray names = o.names();
         if (names == null) return "";
         for (int i = 0; i < names.length(); i++) {
             Object v = o.opt(names.optString(i));
-            if (v instanceof String) {
-                sb.append(' ').append(v);
-            }
+            if (v instanceof String) sb.append(' ').append(v);
         }
         return sb.toString();
     }
@@ -130,6 +136,19 @@ public final class CgvClient {
             }
         }
         return "";
+    }
+
+    private static int firstInt(JSONObject o, int fallback, String... keys) {
+        for (String key : keys) {
+            Object v = o.opt(key);
+            if (v == null || v == JSONObject.NULL) continue;
+            if (v instanceof Number) return ((Number) v).intValue();
+            try {
+                String s = String.valueOf(v).replaceAll("[^0-9-]", "");
+                if (!s.isEmpty()) return Integer.parseInt(s);
+            } catch (Exception ignored) {}
+        }
+        return fallback;
     }
 
     private static String normalizeTime(String t) {
