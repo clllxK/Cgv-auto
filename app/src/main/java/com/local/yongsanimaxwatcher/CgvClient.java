@@ -8,18 +8,32 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 public final class CgvClient {
-    public static final String SITE_NO = "0013";
-    public static final String MOVIE = "오디세이";
-    public static final String FORMAT = "IMAX";
-    public static final String BOOKING_URL =
-            "https://cgv.co.kr/cnm/movieBook/cinema?siteNm="
-                    + urlEncode("용산아이파크몰") + "&siteNo=0013";
+    private static final String API = "https://cgv.co.kr/api/v1/booking/searchMovScnInfo";
 
-    private static final String API =
-            "https://cgv.co.kr/api/v1/booking/searchMovScnInfo";
+    private final String theaterName;
+    private final String siteNo;
+    private final String movieKeyword;
+    private final String formatKeyword;
+
+    public CgvClient(String theaterName, String siteNo, String movieKeyword, String formatKeyword) {
+        this.theaterName = safe(theaterName);
+        this.siteNo = safe(siteNo);
+        this.movieKeyword = safe(movieKeyword);
+        this.formatKeyword = safe(formatKeyword);
+    }
+
+    public String bookingUrl() {
+        return bookingUrl(theaterName, siteNo);
+    }
+
+    public static String bookingUrl(String theaterName, String siteNo) {
+        return "https://cgv.co.kr/cnm/movieBook/cinema?siteNm="
+                + urlEncode(theaterName) + "&siteNo=" + urlEncode(siteNo);
+    }
 
     public static final class Showtime {
         public final String date;
@@ -39,14 +53,18 @@ public final class CgvClient {
         }
 
         public String key() {
-            return date + "|" + time + "|" + hall;
+            return date + "|" + time + "|" + hall + "|" + title;
         }
     }
 
     public List<Showtime> fetchMatches(String date) throws Exception {
+        if (!siteNo.matches("\\d{4}")) {
+            throw new IllegalArgumentException("CGV 극장 코드는 4자리 숫자여야 해.");
+        }
+
         String url = API
                 + "?coCd=A420"
-                + "&siteNo=" + SITE_NO
+                + "&siteNo=" + siteNo
                 + "&scnYmd=" + date
                 + "&rtctlScopCd=08";
 
@@ -54,7 +72,7 @@ public final class CgvClient {
         headers.put("User-Agent", "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36");
         headers.put("Accept", "application/json, text/plain, */*");
         headers.put("Accept-Language", "ko-KR,ko;q=0.9,en;q=0.7");
-        headers.put("Referer", BOOKING_URL);
+        headers.put("Referer", bookingUrl());
 
         String body = HttpUtil.get(url, headers);
         Object root;
@@ -71,52 +89,48 @@ public final class CgvClient {
         if (node instanceof JSONObject) {
             JSONObject o = (JSONObject) node;
 
-            String movie = first(o,
-                    "prodNm", "expoProdNm", "movNm", "movieNm", "movieName", "prodName");
-            String hall = first(o,
-                    "scnsNm", "expoScnsNm", "scnsName", "theaterNm", "hallNm", "screenNm");
-            String format = first(o,
-                    "movkndDsplNm", "movKndNm", "formatNm", "specialTypeNm", "screenTypeNm");
-
+            String movie = first(o, "prodNm", "expoProdNm", "movNm", "movieNm", "movieName", "prodName");
+            String hall = first(o, "scnsNm", "expoScnsNm", "scnsName", "theaterNm", "hallNm", "screenNm");
+            String format = first(o, "movkndDsplNm", "movKndNm", "formatNm", "specialTypeNm", "screenTypeNm");
             String allStrings = collectStrings(o);
-            String combined = (hall + " " + format + " " + allStrings).toUpperCase();
-            boolean titleMatch = movie.contains(MOVIE) || allStrings.contains(MOVIE);
-            boolean formatMatch = combined.contains(FORMAT);
+            String haystack = (movie + " " + hall + " " + format + " " + allStrings).toLowerCase(Locale.KOREA);
+
+            boolean titleMatch = movieKeyword.isEmpty()
+                    || haystack.contains(movieKeyword.toLowerCase(Locale.KOREA));
+            boolean formatMatch = formatKeyword.isEmpty()
+                    || "전체".equals(formatKeyword)
+                    || haystack.contains(formatKeyword.toLowerCase(Locale.KOREA));
 
             if (titleMatch && formatMatch) {
-                String time = normalizeTime(first(o,
-                        "scnsrtTm", "scnStartTm", "startTm", "startTime", "scnsrtTime"));
-                String actualHall = hall.isEmpty() ? "IMAX" : hall;
-                String actualMovie = movie.isEmpty() ? MOVIE : movie;
-                int freeSeats = firstInt(o, -1,
-                        "frSeatCnt", "remainSeatCnt", "restSeatCnt", "availableSeatCnt", "seatRemainCnt");
-                int totalSeats = firstInt(o, -1,
-                        "stcnt", "totSeatCnt", "totalSeatCnt", "seatCnt");
-                String key = date + "|" + time + "|" + actualHall;
-                out.put(key, new Showtime(date, time, actualHall, actualMovie, freeSeats, totalSeats));
+                String time = normalizeTime(first(o, "scnsrtTm", "scnStartTm", "startTm", "startTime", "scnsrtTime"));
+                String actualHall = hall.isEmpty() ? (format.isEmpty() ? "상영관" : format) : hall;
+                String actualMovie = movie.isEmpty() ? (movieKeyword.isEmpty() ? "영화" : movieKeyword) : movie;
+                int freeSeats = firstInt(o, -1, "frSeatCnt", "remainSeatCnt", "restSeatCnt", "availableSeatCnt", "seatRemainCnt");
+                int totalSeats = firstInt(o, -1, "stcnt", "totSeatCnt", "totalSeatCnt", "seatCnt");
+
+                if (!time.isEmpty()) {
+                    Showtime s = new Showtime(date, time, actualHall, actualMovie, freeSeats, totalSeats);
+                    out.put(s.key(), s);
+                }
             }
 
             JSONArray names = o.names();
             if (names != null) {
                 for (int i = 0; i < names.length(); i++) {
                     Object child = o.opt(names.optString(i));
-                    if (child instanceof JSONObject || child instanceof JSONArray) {
-                        walk(child, date, out);
-                    }
+                    if (child instanceof JSONObject || child instanceof JSONArray) walk(child, date, out);
                 }
             }
         } else if (node instanceof JSONArray) {
             JSONArray a = (JSONArray) node;
             for (int i = 0; i < a.length(); i++) {
                 Object child = a.opt(i);
-                if (child instanceof JSONObject || child instanceof JSONArray) {
-                    walk(child, date, out);
-                }
+                if (child instanceof JSONObject || child instanceof JSONArray) walk(child, date, out);
             }
         }
     }
 
-    private String collectStrings(JSONObject o) {
+    private static String collectStrings(JSONObject o) {
         StringBuilder sb = new StringBuilder();
         JSONArray names = o.names();
         if (names == null) return "";
@@ -159,11 +173,10 @@ public final class CgvClient {
         return t;
     }
 
+    private static String safe(String s) { return s == null ? "" : s.trim(); }
+
     private static String urlEncode(String s) {
-        try {
-            return URLEncoder.encode(s, "UTF-8");
-        } catch (Exception e) {
-            throw new IllegalStateException(e);
-        }
+        try { return URLEncoder.encode(s, "UTF-8"); }
+        catch (Exception e) { throw new IllegalStateException(e); }
     }
 }
