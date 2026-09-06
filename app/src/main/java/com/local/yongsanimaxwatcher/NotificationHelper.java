@@ -9,12 +9,11 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.media.AudioAttributes;
 import android.net.Uri;
-import android.os.Build;
 
 public final class NotificationHelper {
     public static final int FOREGROUND_ID = 1001;
     private static final String STATUS_CH = "watch_status";
-    private static final String ALERT_CH = "ticket_alert";
+    private static final String ALERT_CH = "ticket_alert_v2";
 
     private final Context context;
     private final NotificationManager nm;
@@ -28,12 +27,12 @@ public final class NotificationHelper {
     private void createChannels() {
         NotificationChannel status = new NotificationChannel(
                 STATUS_CH, "감시 상태", NotificationManager.IMPORTANCE_LOW);
-        status.setDescription("용아맥 오디세이 감시가 실행 중임을 표시합니다.");
+        status.setDescription("CGV 예매 감시가 실행 중임을 표시합니다.");
         nm.createNotificationChannel(status);
 
         NotificationChannel alert = new NotificationChannel(
-                ALERT_CH, "예매 오픈 알림", NotificationManager.IMPORTANCE_HIGH);
-        alert.setDescription("새 IMAX 날짜가 열렸을 때 울립니다.");
+                ALERT_CH, "CGV 예매/취소표 알림", NotificationManager.IMPORTANCE_HIGH);
+        alert.setDescription("새 날짜나 취소표가 발견되면 울립니다.");
         alert.enableVibration(true);
         alert.setVibrationPattern(new long[]{0, 300, 180, 300, 180, 700});
         alert.enableLights(true);
@@ -56,24 +55,23 @@ public final class NotificationHelper {
                 context, 12, stop, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
 
         return new Notification.Builder(context, STATUS_CH)
-                .setSmallIcon(com.local.yongsanimaxwatcher.R.drawable.ic_stat_ticket)
-                .setContentTitle("용아맥 오디세이 감시 중")
+                .setSmallIcon(R.drawable.ic_stat_ticket)
+                .setContentTitle("CGV 예매 감시 중")
                 .setContentText(text)
                 .setContentIntent(openPi)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
-                .addAction(new Notification.Action.Builder(
-                        null, "감시 중지", stopPi).build())
+                .addAction(new Notification.Action.Builder(null, "감시 중지", stopPi).build())
                 .build();
     }
 
-    public void alert(String title, String text, int id) {
-        Intent view = new Intent(Intent.ACTION_VIEW, Uri.parse(CgvClient.BOOKING_URL));
+    public void alert(String title, String text, int id, String bookingUrl) {
+        Intent view = new Intent(Intent.ACTION_VIEW, Uri.parse(bookingUrl));
         PendingIntent pi = PendingIntent.getActivity(
                 context, 20 + id, view, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
 
         Notification n = new Notification.Builder(context, ALERT_CH)
-                .setSmallIcon(com.local.yongsanimaxwatcher.R.drawable.ic_stat_ticket)
+                .setSmallIcon(R.drawable.ic_stat_ticket)
                 .setContentTitle(title)
                 .setContentText(text)
                 .setStyle(new Notification.BigTextStyle().bigText(text))
@@ -85,7 +83,9 @@ public final class NotificationHelper {
         nm.notify(id, n);
     }
 
-    public void updateForeground(Notification n) {
-        nm.notify(FOREGROUND_ID, n);
+    public void alert(String title, String text, int id) {
+        alert(title, text, id, "https://cgv.co.kr/cnm/movieBook");
     }
+
+    public void updateForeground(Notification n) { nm.notify(FOREGROUND_ID, n); }
 }
