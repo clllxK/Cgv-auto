@@ -13,6 +13,7 @@ import java.util.Map;
 
 public final class CgvClient {
     private static final String API = "https://cgv.co.kr/api/v1/booking/searchMovScnInfo";
+    public static final String BOOKING_URL = "https://cgv.co.kr/cnm/movieBook/cinema";
 
     private final String theaterName;
     private final String siteNo;
@@ -31,7 +32,7 @@ public final class CgvClient {
     }
 
     public static String bookingUrl(String theaterName, String siteNo) {
-        return "https://cgv.co.kr/cnm/movieBook/cinema?siteNm="
+        return BOOKING_URL + "?siteNm="
                 + urlEncode(theaterName) + "&siteNo=" + urlEncode(siteNo);
     }
 
