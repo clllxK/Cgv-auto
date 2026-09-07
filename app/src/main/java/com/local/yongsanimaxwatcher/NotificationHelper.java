@@ -47,7 +47,7 @@ public final class NotificationHelper {
 
         NotificationChannel hot = new NotificationChannel(
                 HOT_CH, "🔥 최우선 좌석 알림", NotificationManager.IMPORTANCE_HIGH);
-        hot.setDescription("매진 회차에서 좌석이 다시 생기는 등 가장 중요한 좌석 알림입니다.");
+        hot.setDescription("매진 회차 좌석이나 붙은 2자리가 생기면 강하게 알립니다.");
         hot.enableVibration(true);
         hot.setVibrationPattern(new long[]{0, 700, 120, 700, 120, 700, 120, 1200});
         hot.enableLights(true);
@@ -83,6 +83,26 @@ public final class NotificationHelper {
 
     public void hotAlert(String title, String text, int id, String bookingUrl) {
         post(HOT_CH, title, text, id, bookingUrl);
+    }
+
+    public void hotPairAlert(String title, String text, int id, String pageUrl, String targetLabel) {
+        Intent open = new Intent(context, SeatPairActivity.class);
+        open.putExtra("url", pageUrl);
+        open.putExtra("target", targetLabel);
+        open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent pi = PendingIntent.getActivity(
+                context, 30000 + id, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        Notification n = new Notification.Builder(context, HOT_CH)
+                .setSmallIcon(R.drawable.ic_stat_ticket)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setStyle(new Notification.BigTextStyle().bigText(text))
+                .setContentIntent(pi)
+                .setAutoCancel(true)
+                .setCategory(Notification.CATEGORY_ALARM)
+                .setPriority(Notification.PRIORITY_MAX)
+                .build();
+        nm.notify(id, n);
     }
 
     private void post(String channel, String title, String text, int id, String bookingUrl) {
