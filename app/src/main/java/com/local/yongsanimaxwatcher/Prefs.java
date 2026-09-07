@@ -53,7 +53,13 @@ public final class Prefs {
     }
 
     public Set<String> getSelectedMovieTitles() {
-        return new HashSet<>(p.getStringSet("selected_movie_titles", Collections.emptySet()));
+        HashSet<String> out = new HashSet<>(p.getStringSet("selected_movie_titles", Collections.emptySet()));
+        if (!out.isEmpty()) return out;
+        for (String key : getSelectedShowtimeKeys()) {
+            String[] parts = key.split("\\|", 4);
+            if (parts.length == 4 && !parts[3].trim().isEmpty()) out.add(parts[3].trim());
+        }
+        return out;
     }
 
     public void setSelectedShowtimes(Set<String> keys, Set<String> labels) {
