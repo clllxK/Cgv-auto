@@ -26,11 +26,21 @@ import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
 public final class MainActivity extends Activity {
     private Prefs prefs;
     private KakaoClient kakao;
     private TextView status;
     private TextView detail;
+    private TextView selectedSummary;
     private EditText theaterName;
     private EditText siteNo;
     private EditText movieKeyword;
@@ -40,6 +50,7 @@ public final class MainActivity extends Activity {
     private Spinner interval;
     private Button startStop;
     private final Handler ui = new Handler(Looper.getMainLooper());
+    private final ExecutorService loader = Executors.newSingleThreadExecutor();
 
     private final Runnable refresher = new Runnable() {
         @Override public void run() {
@@ -67,7 +78,7 @@ public final class MainActivity extends Activity {
         root.setBackgroundColor(Color.rgb(246, 246, 246));
 
         root.addView(text("CGV 예매 알리미", 26, true));
-        TextView subtitle = text("원하는 CGV 극장과 영화를 지정하면 새 날짜와 취소표를 감시해.", 14, false);
+        TextView subtitle = text("원하는 영화의 실제 상영 회차를 골라서 그 회차만 감시해.", 14, false);
         subtitle.setTextColor(Color.DKGRAY);
         root.addView(subtitle, lpTop(6));
 
@@ -77,9 +88,14 @@ public final class MainActivity extends Activity {
         detail.setTextColor(Color.DKGRAY);
         card.addView(status);
         card.addView(detail, lpTop(8));
+        TextView selectedTitle = text("🎬 감시 중인 회차", 16, true);
+        card.addView(selectedTitle, lpTop(14));
+        selectedSummary = text("선택된 회차 없음", 14, false);
+        selectedSummary.setTextColor(Color.rgb(35, 35, 35));
+        card.addView(selectedSummary, lpTop(6));
         root.addView(card, lpTop(18));
 
-        root.addView(section("1. 감시 대상"), lpTop(22));
+        root.addView(section("1. 극장 / 영화 / 회차 선택"), lpTop(22));
 
         theaterName = input("CGV 극장명 (예: 용산아이파크몰)", false);
         theaterName.setText(prefs.getTheaterName());
@@ -90,19 +106,26 @@ public final class MainActivity extends Activity {
         siteNo.setText(prefs.getSiteNo());
         root.addView(siteNo, lpTop(8));
 
-        movieKeyword = input("영화명 (빈칸 = 모든 영화)", false);
+        movieKeyword = input("영화명 빠른 필터 (빈칸 = 전체 영화)", false);
         movieKeyword.setText(prefs.getMovieKeyword());
         root.addView(movieKeyword, lpTop(8));
 
-        formatKeyword = input("포맷/특별관 (예: IMAX, 4DX / 빈칸 = 전체)", false);
+        formatKeyword = input("상영관 필터 (예: IMAX, 4DX / 빈칸 = 전체)", false);
         formatKeyword.setText(prefs.getFormatKeyword());
         root.addView(formatKeyword, lpTop(8));
 
-        Button saveTarget = button("감시 대상 저장");
-        saveTarget.setOnClickListener(v -> {
-            if (saveTarget()) toast("감시 대상을 저장했어. 대상이 바뀌면 기준 좌석도 자동 초기화돼.");
+        Button loadShowtimes = button("영화/상영시간 불러와서 선택");
+        loadShowtimes.setOnClickListener(v -> loadShowtimes(loadShowtimes));
+        root.addView(loadShowtimes, lpTop(10));
+
+        Button clearShowtimes = button("선택한 회차 모두 해제");
+        clearShowtimes.setOnClickListener(v -> {
+            prefs.clearSelectedShowtimes();
+            prefs.resetBaseline();
+            refreshStatus();
+            toast("선택한 회차를 모두 해제했어.");
         });
-        root.addView(saveTarget, lpTop(8));
+        root.addView(clearShowtimes, lpTop(8));
 
         Button findCode = button("CGV 극장 코드 확인하기");
         findCode.setOnClickListener(v -> startActivity(new Intent(Intent.ACTION_VIEW,
@@ -110,9 +133,8 @@ public final class MainActivity extends Activity {
         root.addView(findCode, lpTop(8));
 
         TextView targetGuide = text(
-                "극장 코드는 CGV 극장별 예매 주소의 siteNo= 뒤 4자리야. "
-                        + "예: 용산아이파크몰 0013 · 왕십리 0074 · 영등포 0059 · 강남 0056. "
-                        + "영화명을 비우면 해당 극장의 모든 영화 취소표/새 날짜를 감시해.", 13, false);
+                "극장/필터를 입력한 뒤 '영화/상영시간 불러오기'를 누르면 앞으로 8일간 실제 회차를 불러와. "
+                        + "원하는 날짜·시간을 여러 개 체크하면 이후에는 체크한 회차만 알림이 와.", 13, false);
         targetGuide.setTextColor(Color.DKGRAY);
         root.addView(targetGuide, lpTop(10));
 
@@ -172,10 +194,10 @@ public final class MainActivity extends Activity {
         battery.setOnClickListener(v -> requestBatteryExemption());
         root.addView(battery, lpTop(8));
 
-        Button reset = button("현재 일정/좌석 기준 다시 잡기");
+        Button reset = button("현재 좌석 기준 다시 잡기");
         reset.setOnClickListener(v -> new AlertDialog.Builder(this)
                 .setTitle("기준 초기화")
-                .setMessage("다음 감시 시작 때 현재 일정과 잔여 좌석을 다시 기준으로 잡아. 기존 좌석으로 오탐 알림이 가는 걸 막아줘.")
+                .setMessage("다음 감시 시작 때 선택한 회차의 현재 잔여 좌석을 다시 기준으로 잡아. 기존 좌석 때문에 알림이 몰리는 걸 막아줘.")
                 .setPositiveButton("초기화", (d, w) -> {
                     prefs.resetBaseline();
                     toast("초기화했어. 감시를 다시 시작해줘.");
@@ -193,14 +215,92 @@ public final class MainActivity extends Activity {
         root.addView(cgv, lpTop(8));
 
         TextView note = text(
-                "빈 영화명 + 빈 포맷으로 두면 그 극장의 모든 영화를 감시할 수 있지만 알림이 많아질 수 있어. "
-                        + "특정 신작만 노릴 때는 영화명을 넣는 게 좋아. 30초 감시는 배터리 사용량도 커져.", 13, false);
+                "선택 회차가 있으면 다른 영화나 다른 시간에 자리가 생겨도 알림하지 않아. "
+                        + "현재는 CGV 시간표 API가 잔여 좌석 수만 제공해서 정확한 좌석 번호/중앙 명당 판별은 별도 좌석맵 연동이 필요해.", 13, false);
         note.setTextColor(Color.DKGRAY);
         root.addView(note, lpTop(14));
 
         ScrollView scroll = new ScrollView(this);
         scroll.addView(root);
         return scroll;
+    }
+
+    private void loadShowtimes(Button button) {
+        if (!saveTarget()) return;
+        button.setEnabled(false);
+        button.setText("상영시간 불러오는 중...");
+
+        String tn = prefs.getTheaterName();
+        String sn = prefs.getSiteNo();
+        String mk = prefs.getMovieKeyword();
+        String fk = prefs.getFormatKeyword();
+
+        loader.execute(() -> {
+            ArrayList<CgvClient.Showtime> all = new ArrayList<>();
+            Exception last = null;
+            try {
+                CgvClient client = new CgvClient(tn, sn, mk, fk);
+                LocalDate today = DateUtil.today();
+                for (int i = 0; i < 8; i++) {
+                    try {
+                        all.addAll(client.fetchMatches(DateUtil.ymd(today.plusDays(i))));
+                    } catch (Exception e) {
+                        last = e;
+                    }
+                    Thread.sleep(180);
+                }
+            } catch (Exception e) {
+                last = e;
+            }
+
+            Exception error = last;
+            runOnUiThread(() -> {
+                button.setEnabled(true);
+                button.setText("영화/상영시간 불러와서 선택");
+                if (all.isEmpty()) {
+                    showResult("회차를 못 불러왔어", error == null
+                            ? "해당 극장/필터에 맞는 상영 회차가 없어."
+                            : "CGV 조회 실패: " + clean(error.getMessage()));
+                } else {
+                    showShowtimePicker(all);
+                }
+            });
+        });
+    }
+
+    private void showShowtimePicker(List<CgvClient.Showtime> source) {
+        LinkedHashMap<String, CgvClient.Showtime> unique = new LinkedHashMap<>();
+        for (CgvClient.Showtime s : source) unique.put(s.key(), s);
+        ArrayList<CgvClient.Showtime> shows = new ArrayList<>(unique.values());
+
+        String[] display = new String[shows.size()];
+        boolean[] checked = new boolean[shows.size()];
+        Set<String> current = prefs.getSelectedShowtimeKeys();
+        for (int i = 0; i < shows.size(); i++) {
+            CgvClient.Showtime s = shows.get(i);
+            String seats = s.freeSeats >= 0 ? " · 잔여 " + s.freeSeats + "석" : "";
+            display[i] = s.title + "\n" + DateUtil.pretty(s.date) + " " + s.time + " · " + s.hall + seats;
+            checked[i] = current.contains(s.key());
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle("알림 받을 회차 선택")
+                .setMultiChoiceItems(display, checked, (dialog, which, isChecked) -> checked[which] = isChecked)
+                .setPositiveButton("선택 저장", (dialog, which) -> {
+                    HashSet<String> keys = new HashSet<>();
+                    HashSet<String> labels = new HashSet<>();
+                    for (int i = 0; i < shows.size(); i++) {
+                        if (!checked[i]) continue;
+                        CgvClient.Showtime s = shows.get(i);
+                        keys.add(s.key());
+                        labels.add(DateUtil.pretty(s.date) + " · " + s.title + " · " + s.time + " · " + s.hall);
+                    }
+                    prefs.setSelectedShowtimes(keys, labels);
+                    refreshStatus();
+                    toast(keys.isEmpty() ? "선택한 회차가 없어." : keys.size() + "개 회차를 감시 대상으로 저장했어.");
+                })
+                .setNegativeButton("취소", null)
+                .show();
     }
 
     private boolean saveTarget() {
@@ -235,6 +335,19 @@ public final class MainActivity extends Activity {
                 : interval.getSelectedItemPosition() == 1 ? 60 : 30;
         prefs.setIntervalSeconds(seconds);
 
+        if (!prefs.hasSelectedShowtimes()) {
+            new AlertDialog.Builder(this)
+                    .setTitle("선택한 회차가 없어")
+                    .setMessage("이대로 시작하면 예전 방식처럼 입력한 영화/상영관 전체를 감시해서 알림이 많이 올 수 있어. 먼저 원하는 회차를 선택하는 걸 추천해.")
+                    .setPositiveButton("그래도 시작", (d, w) -> confirmKakaoAndStart())
+                    .setNegativeButton("취소", null)
+                    .show();
+            return;
+        }
+        confirmKakaoAndStart();
+    }
+
+    private void confirmKakaoAndStart() {
         if (!kakao.hasRefreshToken()) {
             new AlertDialog.Builder(this)
                     .setTitle("카카오 로그인이 아직 안 됐어")
@@ -252,7 +365,7 @@ public final class MainActivity extends Activity {
         i.setAction(WatchService.ACTION_START);
         startForegroundService(i);
         prefs.setWatching(true);
-        toast("감시 시작. 상단에 고정 알림이 뜰 거야.");
+        toast("감시 시작. 선택한 회차만 확인할게.");
         refreshStatus();
     }
 
@@ -269,11 +382,12 @@ public final class MainActivity extends Activity {
         }
 
         detail.setText(prefs.getStatus()
-                + "\n대상: " + prefs.targetLabel()
+                + "\n극장: " + prefs.getTheaterName()
                 + "\n마지막 확인: " + prefs.getLastChecked()
-                + "\n현재 기준 날짜: " + latestPretty
+                + "\n확인 기준일: " + latestPretty
                 + "\n카카오: " + (kakao.hasRefreshToken() ? "연결됨" : "로그인 필요")
                 + "\n간격: " + prefs.getIntervalSeconds() + "초");
+        selectedSummary.setText(prefs.selectedShowtimesSummary());
         startStop.setText(watching ? "감시 중지" : "감시 시작");
     }
 
@@ -358,9 +472,14 @@ public final class MainActivity extends Activity {
         refreshStatus();
     }
 
+    private static String clean(String s) {
+        return s == null || s.trim().isEmpty() ? "알 수 없는 오류" : s.replace("\n", " ");
+    }
+
     @Override
     protected void onDestroy() {
         ui.removeCallbacks(refresher);
+        loader.shutdownNow();
         super.onDestroy();
     }
 }
