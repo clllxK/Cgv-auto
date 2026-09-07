@@ -28,15 +28,15 @@
         </activity>
 
         <activity
+            android:name=".HomeActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <activity
             android:name=".SeatPairActivity"
             android:exported="false"
             android:launchMode="singleTop"
             android:label="CGV 연석 감시"
-            android:screenOrientation="portrait" />
-
-        <activity
-            android:name=".HomeActivity"
-            android:exported="false"
             android:screenOrientation="portrait" />
 
         <service
@@ -45,7 +45,16 @@
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="User-requested continuous monitoring of a cinema showtime endpoint for newly opened dates and cancellation seats." />
+                android:value="User-requested continuous monitoring of cinema showtimes for newly opened dates and cancellation seats." />
+        </service>
+
+        <service
+            android:name=".PairWatchService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-requested continuous monitoring of a selected cinema showtime for two adjacent available seats using a normal embedded browser session." />
         </service>
 
         <receiver
