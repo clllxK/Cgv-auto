@@ -27,6 +27,18 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".SeatPairActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:label="CGV 연석 감시"
+            android:screenOrientation="portrait">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
         <service
             android:name=".WatchService"
             android:exported="false"
