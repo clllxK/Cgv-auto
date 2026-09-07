@@ -10,8 +10,8 @@ android {
         applicationId = "com.local.yongsanimaxwatcher"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = providers.gradleProperty("VERSION_CODE").orNull?.toIntOrNull() ?: 1
+        versionName = providers.gradleProperty("VERSION_NAME").orNull ?: "1.0.0"
     }
 
     buildTypes {
