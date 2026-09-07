@@ -7,7 +7,7 @@ import java.util.*;
 public final class Prefs {
     private static final String NAME="watcher_prefs"; private final SharedPreferences p;
     public Prefs(Context c){p=c.getSharedPreferences(NAME,Context.MODE_PRIVATE);}
-    public int getIntervalSeconds(){return p.getInt("interval_seconds",30);} public void setIntervalSeconds(int s){p.edit().putInt("interval_seconds",s).apply();}
+    public int getIntervalSeconds(){return p.getInt("interval_seconds",30);} public void setIntervalSeconds(int s){p.edit().putInt("interval_seconds",Math.max(30,s)).apply();}
     public String getTheaterName(){return p.getString("theater_name","용산아이파크몰");} public String getSiteNo(){return p.getString("site_no","0013");}
     public String getMovieKeyword(){return p.getString("movie_keyword","");} public String getFormatKeyword(){return p.getString("format_keyword","IMAX");}
     public String getUiMovie(){return p.getString("ui_movie","");} public void setUiMovie(String t){p.edit().putString("ui_movie",clean(t)).apply();}
@@ -27,7 +27,16 @@ public final class Prefs {
     public int getDateOpenState(String date){return p.getInt("date_open_"+date,-1);} public void setDateOpenState(String date,boolean open){p.edit().putInt("date_open_"+date,open?1:0).apply();}
     public int getSeatCount(String k){return p.getInt("seat_"+k,Integer.MIN_VALUE);} public void setSeatCount(String k,int v){p.edit().putInt("seat_"+k,v).apply();}
     public String getLastChecked(){return p.getString("last_checked","-");} public void setLastChecked(String v){p.edit().putString("last_checked",v).apply();} public String getStatus(){return p.getString("status","정지됨");} public void setStatus(String v){p.edit().putString("status",v).apply();}
-    public boolean isWatching(){return p.getBoolean("watching",false);} public void setWatching(boolean v){p.edit().putBoolean("watching",v).apply();} public boolean isAutoRestart(){return p.getBoolean("auto_restart",true);} public void setAutoRestart(boolean v){p.edit().putBoolean("auto_restart",v).apply();}
+
+    public boolean isStandardWatching(){return p.getBoolean("standard_watching",p.getBoolean("watching",false)&&!isAdjacentSeatOnly());}
+    public boolean isPairWatching(){return p.getBoolean("pair_watching",false);}
+    public boolean isWatching(){return isStandardWatching()||isPairWatching();}
+    public void setStandardWatching(boolean v){p.edit().putBoolean("standard_watching",v).putBoolean("watching",v||isPairWatching()).apply();}
+    public void setPairWatching(boolean v){p.edit().putBoolean("pair_watching",v).putBoolean("watching",v||isStandardWatching()).apply();}
+    public void setWatching(boolean v){setStandardWatching(v);}
+    public void clearWatchingFlags(){p.edit().putBoolean("standard_watching",false).putBoolean("pair_watching",false).putBoolean("watching",false).apply();}
+
+    public boolean isAutoRestart(){return p.getBoolean("auto_restart",true);} public void setAutoRestart(boolean v){p.edit().putBoolean("auto_restart",v).apply();}
     public int getConsecutiveErrors(){return p.getInt("consecutive_errors",0);} public void setConsecutiveErrors(int v){p.edit().putInt("consecutive_errors",v).apply();}
     public String targetLabel(){String m=getNewDateMovies().isEmpty()?getUiMovie():android.text.TextUtils.join(",",getNewDateMovies());return getTheaterName()+" · "+m+" · "+getFormatKeyword();}
     public void resetBaseline(){SharedPreferences.Editor e=p.edit().remove("latest_date");for(String k:p.getAll().keySet())if(k.startsWith("seat_")||k.startsWith("date_open_"))e.remove(k);e.apply();}
