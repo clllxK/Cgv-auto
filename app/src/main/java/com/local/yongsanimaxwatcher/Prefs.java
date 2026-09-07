@@ -52,16 +52,29 @@ public final class Prefs {
         return new HashSet<>(p.getStringSet("selected_showtime_labels", Collections.emptySet()));
     }
 
+    public Set<String> getSelectedMovieTitles() {
+        return new HashSet<>(p.getStringSet("selected_movie_titles", Collections.emptySet()));
+    }
+
     public void setSelectedShowtimes(Set<String> keys, Set<String> labels) {
+        setSelectedShowtimes(keys, labels, Collections.emptySet());
+    }
+
+    public void setSelectedShowtimes(Set<String> keys, Set<String> labels, Set<String> movieTitles) {
         p.edit()
                 .putStringSet("selected_showtime_keys", new HashSet<>(keys))
                 .putStringSet("selected_showtime_labels", new HashSet<>(labels))
+                .putStringSet("selected_movie_titles", new HashSet<>(movieTitles))
                 .apply();
         resetBaseline();
     }
 
     public void clearSelectedShowtimes() {
-        p.edit().remove("selected_showtime_keys").remove("selected_showtime_labels").apply();
+        p.edit()
+                .remove("selected_showtime_keys")
+                .remove("selected_showtime_labels")
+                .remove("selected_movie_titles")
+                .apply();
     }
 
     public boolean hasSelectedShowtimes() { return !getSelectedShowtimeKeys().isEmpty(); }
