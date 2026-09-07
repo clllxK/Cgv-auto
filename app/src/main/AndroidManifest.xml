@@ -18,7 +18,7 @@
         android:usesCleartextTraffic="true">
 
         <activity
-            android:name=".HomeActivity"
+            android:name=".MainActivity"
             android:exported="true"
             android:screenOrientation="portrait">
             <intent-filter>
@@ -28,15 +28,15 @@
         </activity>
 
         <activity
-            android:name=".MainActivity"
-            android:exported="false"
-            android:screenOrientation="portrait" />
-
-        <activity
             android:name=".SeatPairActivity"
             android:exported="false"
             android:launchMode="singleTop"
             android:label="CGV 연석 감시"
+            android:screenOrientation="portrait" />
+
+        <activity
+            android:name=".HomeActivity"
+            android:exported="false"
             android:screenOrientation="portrait" />
 
         <service
