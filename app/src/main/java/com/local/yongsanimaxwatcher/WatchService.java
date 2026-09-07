@@ -143,7 +143,7 @@ public final class WatchService extends Service {
         for(CgvClient.Showtime s:list){
             if(!keys.contains(s.key())||s.freeSeats<0) continue;
             int old=prefs.getSeatCount(s.key());
-            if(old!=Integer.MIN_VALUE&&s.freeSeats>old) notifySeatIncrease(s,old,s.freeSeats);
+            if(old!=Integer.MIN_VALUE&&s.freeSeats>old&&s.freeSeats>=2) notifySeatIncrease(s,old,s.freeSeats);
             prefs.setSeatCount(s.key(),s.freeSeats);
         }
     }
@@ -156,8 +156,6 @@ public final class WatchService extends Service {
         boolean open=!matches.isEmpty();
         int oldState=prefs.getDateOpenState(d);
 
-        // 한 번 실제로 열렸다고 확인한 날짜는 일시적인 빈 응답 때문에 다시 '닫힘'으로 내리지 않는다.
-        // 그래야 CGV 응답/파싱이 잠깐 비었을 때 다음 성공 조회를 새 오픈으로 오인하지 않는다.
         if(oldState==1){
             if(open) prefs.setDateOpenState(d,true);
             return;
@@ -171,7 +169,6 @@ public final class WatchService extends Service {
             return;
         }
 
-        // 처음 본 날짜는 알림 없이 기준만 저장한다. 이후 0 -> 1 전환만 알림한다.
         if(oldState==-1){
             prefs.setDateOpenState(d,open);
         }else if(!open){
@@ -195,10 +192,10 @@ public final class WatchService extends Service {
     private void notifySeatIncrease(CgvClient.Showtime s,int old,int now){
         int add=now-old;
         String pretty=DateUtil.pretty(s.date);
-        boolean hot=old==0&&now>0;
-        String title=hot?"🔥 매진 회차 좌석 발생! "+s.title+" "+s.time:"🎟️ "+s.title+" "+s.time+" 취소표 "+add+"석!";
-        String body=prefs.getTheaterName()+" · "+pretty+" "+s.time+" · "+s.hall+"\n"+s.format+" · 잔여 "+old+" → "+now+"석";
-        if(hot) notifications.hotAlert(title,body,7000+Math.abs(s.key().hashCode()%1500),seatClient.bookingUrl());
+        boolean crossedTwo=old<2&&now>=2;
+        String title=crossedTwo?"👫 2명용 취소표 발생! "+s.title+" "+s.time:"🎟️ "+s.title+" "+s.time+" 취소표 "+add+"석!";
+        String body=prefs.getTheaterName()+" · "+pretty+" "+s.time+" · "+s.hall+"\n"+s.format+" · 잔여 "+old+" → "+now+"석\n※ 2석 이상일 때만 알림 · 연석 여부는 CGV 좌석도에서 확인";
+        if(crossedTwo) notifications.hotAlert(title,body,7000+Math.abs(s.key().hashCode()%1500),seatClient.bookingUrl());
         else notifications.alert(title,body,4000+Math.abs(s.key().hashCode()%2500),seatClient.bookingUrl());
         try{kakao.sendMemo(title+"\n"+body);}catch(Exception ignored){}
     }
