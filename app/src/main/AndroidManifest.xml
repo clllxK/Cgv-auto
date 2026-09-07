@@ -18,7 +18,7 @@
         android:usesCleartextTraffic="true">
 
         <activity
-            android:name=".MainActivity"
+            android:name=".HomeActivity"
             android:exported="true"
             android:screenOrientation="portrait">
             <intent-filter>
@@ -28,16 +28,16 @@
         </activity>
 
         <activity
+            android:name=".MainActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <activity
             android:name=".SeatPairActivity"
-            android:exported="true"
+            android:exported="false"
             android:launchMode="singleTop"
             android:label="CGV 연석 감시"
-            android:screenOrientation="portrait">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+            android:screenOrientation="portrait" />
 
         <service
             android:name=".WatchService"
@@ -45,7 +45,7 @@
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="User-requested continuous monitoring of a cinema showtime endpoint for newly opened IMAX dates and immediate notification." />
+                android:value="User-requested continuous monitoring of a cinema showtime endpoint for newly opened dates and cancellation seats." />
         </service>
 
         <receiver
