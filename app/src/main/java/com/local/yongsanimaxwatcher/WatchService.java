@@ -8,7 +8,9 @@ import android.os.IBinder;
 import android.os.PowerManager;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -22,13 +24,17 @@ public final class WatchService extends Service {
     private ExecutorService executor;
     private Prefs prefs;
     private CgvClient cgv;
+    private CgvClient discoveryCgv;
     private KakaoClient kakao;
     private NotificationHelper notifications;
     private PowerManager.WakeLock wakeLock;
 
     private final int[] offsetPattern = {0, 1, 0, 2, 0, 3, 1, 4, 0, 5, 1, 6, 2, 7};
+    private final int[] discoveryOffsets = {1, 2, 1, 3, 1, 4, 2, 5, 1, 6, 3, 7};
     private int patternIndex = 0;
     private int selectedDateIndex = 0;
+    private int discoveryProbeIndex = 0;
+    private int selectedLoopCount = 0;
 
     @Override
     public void onCreate() {
@@ -60,6 +66,9 @@ public final class WatchService extends Service {
                     prefs.getSiteNo(),
                     selected ? "" : prefs.getMovieKeyword(),
                     selected ? "" : prefs.getFormatKeyword());
+            discoveryCgv = selected
+                    ? new CgvClient(prefs.getTheaterName(), prefs.getSiteNo(), "", prefs.getFormatKeyword())
+                    : cgv;
             if (!wakeLock.isHeld()) wakeLock.acquire();
             executor.execute(this::runLoop);
         }
@@ -114,14 +123,18 @@ public final class WatchService extends Service {
                 } catch (Exception e) {
                     last = e;
                 }
-                Thread.sleep(300);
+                Thread.sleep(250);
             }
             if (success == 0) {
                 throw new IllegalStateException("선택한 회차 조회에 실패했어. " + (last == null ? "" : shortMsg(last)));
             }
-            prefs.setLatestDate(dates.get(dates.size() - 1));
+
+            String latestMovieDate = findCurrentLatestSelectedMovieDate();
+            if (latestMovieDate.isEmpty()) latestMovieDate = dates.get(dates.size() - 1);
+            prefs.setLatestDate(latestMovieDate);
             prefs.setStatus("선택 회차 " + prefs.getSelectedShowtimeKeys().size() + "개 기준 설정 완료");
-            notifications.updateForeground(notifications.foreground("선택한 회차만 감시 중 · " + prefs.getTheaterName()));
+            notifications.updateForeground(notifications.foreground(
+                    "선택 회차 + 새 날짜 감시 중 · " + prefs.getTheaterName()));
             return;
         }
 
@@ -153,6 +166,23 @@ public final class WatchService extends Service {
         notifications.updateForeground(notifications.foreground("새 날짜 + 취소표 감시 중 · " + prefs.targetLabel()));
     }
 
+    private String findCurrentLatestSelectedMovieDate() {
+        LocalDate today = DateUtil.today();
+        String latest = "";
+        for (int i = 0; i <= 17 && running.get(); i++) {
+            String date = DateUtil.ymd(today.plusDays(i));
+            try {
+                List<CgvClient.Showtime> matches = filterSelectedMovies(discoveryCgv.fetchMatches(date));
+                if (!matches.isEmpty()) latest = date;
+            } catch (Exception ignored) {}
+            try { Thread.sleep(180); } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        return latest;
+    }
+
     private void snapshot(List<CgvClient.Showtime> matches) {
         Set<String> selected = prefs.getSelectedShowtimeKeys();
         for (CgvClient.Showtime s : matches) {
@@ -173,7 +203,8 @@ public final class WatchService extends Service {
                 if (dates.isEmpty()) throw new IllegalStateException("선택된 회차가 없어.");
                 date = dates.get(selectedDateIndex++ % dates.size());
                 candidate = DateUtil.parseYmd(date);
-                latest = candidate;
+                String latestText = prefs.getLatestDate();
+                latest = latestText.isEmpty() ? candidate : DateUtil.parseYmd(latestText);
             } else {
                 String latestText = prefs.getLatestDate();
                 latest = latestText.isEmpty() ? DateUtil.today() : DateUtil.parseYmd(latestText);
@@ -191,11 +222,13 @@ public final class WatchService extends Service {
             prefs.setLastChecked(DateUtil.nowStamp());
             prefs.setConsecutiveErrors(0);
 
-            boolean isNewDate = !selectedMode && !matches.isEmpty() && candidate.isAfter(latest);
-            if (isNewDate) {
-                notifyNewDate(date, matches);
-                prefs.setLatestDate(date);
-                patternIndex = 0;
+            if (!selectedMode) {
+                boolean isNewDate = !matches.isEmpty() && candidate.isAfter(latest);
+                if (isNewDate) {
+                    notifyNewDate(date, matches);
+                    prefs.setLatestDate(date);
+                    patternIndex = 0;
+                }
             }
 
             Set<String> selectedKeys = prefs.getSelectedShowtimeKeys();
@@ -207,8 +240,12 @@ public final class WatchService extends Service {
                 prefs.setSeatCount(s.key(), s.freeSeats);
             }
 
+            if (selectedMode && (++selectedLoopCount % 3 == 0)) {
+                probeSelectedMovieNewDate();
+            }
+
             String status = selectedMode
-                    ? "선택 회차만 정상 감시 중 · 방금 " + DateUtil.pretty(date) + " 확인"
+                    ? "선택 회차 + 새 날짜 감시 중 · 방금 " + DateUtil.pretty(date) + " 확인"
                     : "정상 감시 중 · " + prefs.targetLabel() + " · 방금 " + DateUtil.pretty(date) + " 확인";
             prefs.setStatus(status);
             notifications.updateForeground(notifications.foreground(status));
@@ -227,13 +264,63 @@ public final class WatchService extends Service {
         }
     }
 
+    private void probeSelectedMovieNewDate() {
+        try {
+            String latestText = prefs.getLatestDate();
+            LocalDate latest = latestText.isEmpty() ? DateUtil.today() : DateUtil.parseYmd(latestText);
+            LocalDate floor = latest.isBefore(DateUtil.today()) ? DateUtil.today() : latest;
+            int offset = discoveryOffsets[discoveryProbeIndex++ % discoveryOffsets.length];
+            LocalDate candidate = floor.plusDays(offset);
+            String date = DateUtil.ymd(candidate);
+
+            List<CgvClient.Showtime> matches = filterSelectedMovies(discoveryCgv.fetchMatches(date));
+            if (!matches.isEmpty() && candidate.isAfter(latest)) {
+                notifyNewDate(date, matches);
+                prefs.setLatestDate(date);
+                discoveryProbeIndex = 0;
+            }
+        } catch (Exception ignored) {
+            // 선택 회차 감시는 계속 유지하고 새 날짜 탐색만 다음 차례에 재시도한다.
+        }
+    }
+
+    private List<CgvClient.Showtime> filterSelectedMovies(List<CgvClient.Showtime> input) {
+        Set<String> titles = prefs.getSelectedMovieTitles();
+        if (titles.isEmpty()) return input;
+        ArrayList<CgvClient.Showtime> out = new ArrayList<>();
+        for (CgvClient.Showtime s : input) {
+            String st = s.title == null ? "" : s.title.toLowerCase(Locale.KOREA);
+            for (String title : titles) {
+                String wanted = title == null ? "" : title.toLowerCase(Locale.KOREA);
+                if (!wanted.isEmpty() && (st.equals(wanted) || st.contains(wanted) || wanted.contains(st))) {
+                    out.add(s);
+                    break;
+                }
+            }
+        }
+        return out;
+    }
+
     private void notifySeatIncrease(CgvClient.Showtime s, int oldSeats, int newSeats) {
         int added = newSeats - oldSeats;
         String pretty = DateUtil.pretty(s.date);
-        String title = "🎟️ " + s.title + " " + s.time + " 취소표 " + added + "석!";
-        String body = prefs.getTheaterName() + " · " + pretty + " " + s.time + " · " + s.hall
-                + "\n잔여 " + oldSeats + " → " + newSeats + "석\n선택한 회차에 자리가 생겼어. 지금 확인해.";
-        notifications.alert(title, body, 4000 + Math.abs(s.key().hashCode() % 4000), cgv.bookingUrl());
+        boolean soldOutReturn = oldSeats == 0 && newSeats > 0;
+
+        String title;
+        String body;
+        if (soldOutReturn) {
+            title = "🔥 매진 회차 좌석 발생! " + s.title + " " + s.time;
+            body = prefs.getTheaterName() + " · " + pretty + " " + s.time + " · " + s.hall
+                    + "\n매진 0석 → " + newSeats + "석\n가장 중요한 취소표야. 바로 좌석 위치를 확인해.";
+            notifications.hotAlert(title, body,
+                    7000 + Math.abs(s.key().hashCode() % 1500), cgv.bookingUrl());
+        } else {
+            title = "🎟️ " + s.title + " " + s.time + " 취소표 " + added + "석!";
+            body = prefs.getTheaterName() + " · " + pretty + " " + s.time + " · " + s.hall
+                    + "\n잔여 " + oldSeats + " → " + newSeats + "석\n선택한 회차에 자리가 생겼어. 지금 확인해.";
+            notifications.alert(title, body,
+                    4000 + Math.abs(s.key().hashCode() % 2500), cgv.bookingUrl());
+        }
         prefs.setStatus("선택 회차 자리 발견! " + s.title + " · " + pretty + " " + s.time + " · " + newSeats + "석");
 
         try { kakao.sendMemo(title + "\n" + body); }
@@ -242,23 +329,33 @@ public final class WatchService extends Service {
 
     private void notifyNewDate(String date, List<CgvClient.Showtime> matches) {
         StringBuilder times = new StringBuilder();
-        String titleMovie = prefs.getMovieKeyword().isEmpty() ? "CGV 영화" : prefs.getMovieKeyword();
         for (CgvClient.Showtime s : matches) {
             if (s.time == null || s.time.isEmpty()) continue;
+            String token = s.time + " " + s.title;
+            if (times.indexOf(token) >= 0) continue;
             if (times.length() > 0) times.append(", ");
-            String token = s.time + (prefs.getMovieKeyword().isEmpty() ? " " + s.title : "");
-            if (times.indexOf(token) < 0) times.append(token);
-            if (times.length() > 120) break;
+            times.append(token);
+            if (times.length() > 160) break;
         }
 
         String pretty = DateUtil.pretty(date);
         String timeText = times.length() == 0 ? "회차 확인 필요" : times.toString();
-        String title = "🚨 " + titleMovie + " 새 날짜!";
-        String body = prefs.getTheaterName() + " · " + pretty + "\n" + timeText + "\n지금 CGV 예매를 확인해.";
-        notifications.alert(title, body, 2000 + Math.abs((date + titleMovie).hashCode() % 5000), cgv.bookingUrl());
+        String title = "🚨 " + watchedMovieLabel() + " 새 날짜 오픈!";
+        String body = prefs.getTheaterName() + " · " + pretty + "\n" + timeText
+                + "\n새 날짜가 열렸어. 원하는 회차를 앱에서 추가 선택해.";
+        notifications.hotAlert(title, body,
+                2000 + Math.abs((date + title).hashCode() % 3000), cgv.bookingUrl());
 
         try { kakao.sendMemo(title + "\n" + body); }
         catch (Exception ignored) {}
+    }
+
+    private String watchedMovieLabel() {
+        Set<String> titles = prefs.getSelectedMovieTitles();
+        if (titles.size() == 1) return titles.iterator().next();
+        if (titles.size() > 1) return "선택 영화 " + titles.size() + "편";
+        if (!prefs.getMovieKeyword().isEmpty()) return prefs.getMovieKeyword();
+        return "CGV 영화";
     }
 
     private void sleepInterruptibly(long ms) {
