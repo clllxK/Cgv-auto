@@ -14,6 +14,7 @@ public final class NotificationHelper {
     public static final int FOREGROUND_ID = 1001;
     private static final String STATUS_CH = "watch_status";
     private static final String ALERT_CH = "ticket_alert_v2";
+    private static final String HOT_CH = "hot_ticket_alert_v1";
 
     private final Context context;
     private final NotificationManager nm;
@@ -30,6 +31,10 @@ public final class NotificationHelper {
         status.setDescription("CGV 예매 감시가 실행 중임을 표시합니다.");
         nm.createNotificationChannel(status);
 
+        AudioAttributes aa = new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
+                .build();
+
         NotificationChannel alert = new NotificationChannel(
                 ALERT_CH, "CGV 예매/취소표 알림", NotificationManager.IMPORTANCE_HIGH);
         alert.setDescription("새 날짜나 취소표가 발견되면 울립니다.");
@@ -37,11 +42,18 @@ public final class NotificationHelper {
         alert.setVibrationPattern(new long[]{0, 300, 180, 300, 180, 700});
         alert.enableLights(true);
         alert.setLightColor(Color.RED);
-        AudioAttributes aa = new AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
-                .build();
         alert.setSound(android.provider.Settings.System.DEFAULT_NOTIFICATION_URI, aa);
         nm.createNotificationChannel(alert);
+
+        NotificationChannel hot = new NotificationChannel(
+                HOT_CH, "🔥 최우선 좌석 알림", NotificationManager.IMPORTANCE_HIGH);
+        hot.setDescription("매진 회차에서 좌석이 다시 생기는 등 가장 중요한 좌석 알림입니다.");
+        hot.enableVibration(true);
+        hot.setVibrationPattern(new long[]{0, 700, 120, 700, 120, 700, 120, 1200});
+        hot.enableLights(true);
+        hot.setLightColor(Color.RED);
+        hot.setSound(android.provider.Settings.System.DEFAULT_ALARM_ALERT_URI, aa);
+        nm.createNotificationChannel(hot);
     }
 
     public Notification foreground(String text) {
@@ -66,18 +78,26 @@ public final class NotificationHelper {
     }
 
     public void alert(String title, String text, int id, String bookingUrl) {
+        post(ALERT_CH, title, text, id, bookingUrl);
+    }
+
+    public void hotAlert(String title, String text, int id, String bookingUrl) {
+        post(HOT_CH, title, text, id, bookingUrl);
+    }
+
+    private void post(String channel, String title, String text, int id, String bookingUrl) {
         Intent view = new Intent(Intent.ACTION_VIEW, Uri.parse(bookingUrl));
         PendingIntent pi = PendingIntent.getActivity(
                 context, 20 + id, view, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
 
-        Notification n = new Notification.Builder(context, ALERT_CH)
+        Notification n = new Notification.Builder(context, channel)
                 .setSmallIcon(R.drawable.ic_stat_ticket)
                 .setContentTitle(title)
                 .setContentText(text)
                 .setStyle(new Notification.BigTextStyle().bigText(text))
                 .setContentIntent(pi)
                 .setAutoCancel(true)
-                .setCategory(Notification.CATEGORY_REMINDER)
+                .setCategory(Notification.CATEGORY_ALARM)
                 .setPriority(Notification.PRIORITY_MAX)
                 .build();
         nm.notify(id, n);
