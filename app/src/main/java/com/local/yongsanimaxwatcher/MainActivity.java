@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -15,11 +16,13 @@ import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.text.InputType;
+import android.view.Gravity;
 import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
@@ -27,35 +30,58 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity {
+    private static final int RED = Color.rgb(232, 32, 48);
+    private static final int BG = Color.rgb(247, 247, 247);
+    private static final int TEXT = Color.rgb(25, 25, 25);
+    private static final int SUB = Color.rgb(105, 105, 105);
+    private static final int BORDER = Color.rgb(225, 225, 225);
+
+    private final String[][] THEATERS = {
+            {"용산아이파크몰", "0013"}, {"왕십리", "0074"}, {"영등포", "0059"},
+            {"강남", "0056"}, {"여의도", "0112"}, {"신촌아트레온", "0150"},
+            {"홍대", "0191"}, {"건대입구", "0229"}, {"동대문", "0252"},
+            {"천호", "0199"}, {"압구정", "0040"}, {"청담씨네시티", "0107"},
+            {"구로", "0010"}, {"상봉", "0046"}, {"중계", "0131"}, {"직접 입력", ""}
+    };
+
     private Prefs prefs;
     private KakaoClient kakao;
-    private TextView status;
-    private TextView detail;
-    private TextView selectedSummary;
-    private EditText theaterName;
-    private EditText siteNo;
-    private EditText movieKeyword;
-    private EditText formatKeyword;
-    private EditText restKey;
-    private EditText clientSecret;
-    private Spinner interval;
-    private Button startStop;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService loader = Executors.newSingleThreadExecutor();
+
+    private Spinner theaterSpinner;
+    private LinearLayout dateRow;
+    private LinearLayout movieList;
+    private TextView statusPill;
+    private TextView statusDetail;
+    private TextView selectedCount;
+    private TextView selectedPreview;
+    private TextView emptyHint;
+    private Button refreshButton;
+    private Button startStop;
+
+    private final Map<String, List<CgvClient.Showtime>> showsByDate = new LinkedHashMap<>();
+    private String currentDate = "";
+    private boolean loading = false;
 
     private final Runnable refresher = new Runnable() {
         @Override public void run() {
             refreshStatus();
-            ui.postDelayed(this, 1000);
+            ui.postDelayed(this, 1500);
         }
     };
 
@@ -68,296 +94,407 @@ public final class MainActivity extends Activity {
         requestNotificationPermission();
         setContentView(buildUi());
         ui.post(refresher);
+        ui.postDelayed(() -> loadSchedule(false), 250);
     }
 
     private View buildUi() {
-        int pad = dp(18);
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(pad, pad, pad, pad);
-        root.setBackgroundColor(Color.rgb(246, 246, 246));
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setBackgroundColor(BG);
 
-        root.addView(text("CGV 예매 알리미", 26, true));
-        TextView subtitle = text("원하는 영화의 실제 상영 회차를 골라서 그 회차만 감시해.", 14, false);
-        subtitle.setTextColor(Color.DKGRAY);
-        root.addView(subtitle, lpTop(6));
-
-        LinearLayout card = card();
-        status = text("상태 확인 중", 18, true);
-        detail = text("", 13, false);
-        detail.setTextColor(Color.DKGRAY);
-        card.addView(status);
-        card.addView(detail, lpTop(8));
-        TextView selectedTitle = text("🎬 감시 중인 회차", 16, true);
-        card.addView(selectedTitle, lpTop(14));
-        selectedSummary = text("선택된 회차 없음", 14, false);
-        selectedSummary.setTextColor(Color.rgb(35, 35, 35));
-        card.addView(selectedSummary, lpTop(6));
-        root.addView(card, lpTop(18));
-
-        root.addView(section("1. 극장 / 영화 / 회차 선택"), lpTop(22));
-
-        theaterName = input("CGV 극장명 (예: 용산아이파크몰)", false);
-        theaterName.setText(prefs.getTheaterName());
-        root.addView(theaterName, lpTop(8));
-
-        siteNo = input("CGV 극장 코드 4자리 (예: 0013)", false);
-        siteNo.setInputType(InputType.TYPE_CLASS_NUMBER);
-        siteNo.setText(prefs.getSiteNo());
-        root.addView(siteNo, lpTop(8));
-
-        movieKeyword = input("영화명 빠른 필터 (빈칸 = 전체 영화)", false);
-        movieKeyword.setText(prefs.getMovieKeyword());
-        root.addView(movieKeyword, lpTop(8));
-
-        formatKeyword = input("상영관 필터 (예: IMAX, 4DX / 빈칸 = 전체)", false);
-        formatKeyword.setText(prefs.getFormatKeyword());
-        root.addView(formatKeyword, lpTop(8));
-
-        Button loadShowtimes = button("영화/상영시간 불러와서 선택");
-        loadShowtimes.setOnClickListener(v -> loadShowtimes(loadShowtimes));
-        root.addView(loadShowtimes, lpTop(10));
-
-        Button clearShowtimes = button("선택한 회차 모두 해제");
-        clearShowtimes.setOnClickListener(v -> {
-            prefs.clearSelectedShowtimes();
-            prefs.resetBaseline();
-            refreshStatus();
-            toast("선택한 회차를 모두 해제했어.");
-        });
-        root.addView(clearShowtimes, lpTop(8));
-
-        Button findCode = button("CGV 극장 코드 확인하기");
-        findCode.setOnClickListener(v -> startActivity(new Intent(Intent.ACTION_VIEW,
-                Uri.parse("https://cgv.co.kr/cnm/movieBook/cinema"))));
-        root.addView(findCode, lpTop(8));
-
-        TextView targetGuide = text(
-                "극장/필터를 입력한 뒤 '영화/상영시간 불러오기'를 누르면 앞으로 8일간 실제 회차를 불러와. "
-                        + "원하는 날짜·시간을 여러 개 체크하면 이후에는 체크한 회차만 알림이 와.", 13, false);
-        targetGuide.setTextColor(Color.DKGRAY);
-        root.addView(targetGuide, lpTop(10));
-
-        root.addView(section("2. 카카오 연결"), lpTop(24));
-
-        restKey = input("Kakao REST API 키", false);
-        restKey.setText(kakao.getRestKey());
-        root.addView(restKey, lpTop(8));
-
-        clientSecret = input("Kakao Client Secret", true);
-        clientSecret.setText(kakao.getClientSecret());
-        root.addView(clientSecret, lpTop(8));
-
-        Button save = button("키 저장");
-        save.setOnClickListener(v -> {
-            kakao.saveAppKeys(restKey.getText().toString(), clientSecret.getText().toString());
-            toast("보안 저장소에 저장했어.");
-        });
-        root.addView(save, lpTop(8));
-
-        Button login = button("카카오 로그인");
-        login.setOnClickListener(v -> {
-            kakao.saveAppKeys(restKey.getText().toString(), clientSecret.getText().toString());
-            toast("브라우저에서 카카오 로그인을 완료해줘.");
-            kakao.login(this, (ok, msg) -> showResult(ok ? "완료" : "실패", msg));
-        });
-        root.addView(login, lpTop(8));
-
-        Button test = button("카카오톡 테스트 보내기");
-        test.setOnClickListener(v -> kakao.sendTestAsync(this,
-                (ok, msg) -> showResult(ok ? "성공" : "실패", msg)));
-        root.addView(test, lpTop(8));
-
-        root.addView(section("3. 감시 실행"), lpTop(24));
-
-        interval = new Spinner(this);
-        String[] labels = {"30초 (가장 빠름 · 배터리 사용↑)", "1분", "2분"};
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(this,
-                android.R.layout.simple_spinner_dropdown_item, labels);
-        interval.setAdapter(adapter);
-        int current = prefs.getIntervalSeconds();
-        interval.setSelection(current == 120 ? 2 : current == 60 ? 1 : 0);
-        root.addView(interval, lpTop(8));
-
-        CheckBox auto = new CheckBox(this);
-        auto.setText("재부팅 후 자동으로 다시 감시");
-        auto.setChecked(prefs.isAutoRestart());
-        auto.setOnCheckedChangeListener((b, checked) -> prefs.setAutoRestart(checked));
-        root.addView(auto, lpTop(8));
-
-        startStop = button("감시 시작");
-        startStop.setTextSize(18);
-        startStop.setOnClickListener(v -> toggleWatch());
-        root.addView(startStop, lpTop(10));
-
-        Button battery = button("배터리 최적화 제외 설정");
-        battery.setOnClickListener(v -> requestBatteryExemption());
-        root.addView(battery, lpTop(8));
-
-        Button reset = button("현재 좌석 기준 다시 잡기");
-        reset.setOnClickListener(v -> new AlertDialog.Builder(this)
-                .setTitle("기준 초기화")
-                .setMessage("다음 감시 시작 때 선택한 회차의 현재 잔여 좌석을 다시 기준으로 잡아. 기존 좌석 때문에 알림이 몰리는 걸 막아줘.")
-                .setPositiveButton("초기화", (d, w) -> {
-                    prefs.resetBaseline();
-                    toast("초기화했어. 감시를 다시 시작해줘.");
-                })
-                .setNegativeButton("취소", null)
-                .show());
-        root.addView(reset, lpTop(8));
-
-        Button cgv = button("현재 CGV 예매 화면 열기");
-        cgv.setOnClickListener(v -> {
-            saveTarget();
-            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(
-                    CgvClient.bookingUrl(prefs.getTheaterName(), prefs.getSiteNo()))));
-        });
-        root.addView(cgv, lpTop(8));
-
-        TextView note = text(
-                "선택 회차가 있으면 다른 영화나 다른 시간에 자리가 생겨도 알림하지 않아. "
-                        + "현재는 CGV 시간표 API가 잔여 좌석 수만 제공해서 정확한 좌석 번호/중앙 명당 판별은 별도 좌석맵 연동이 필요해.", 13, false);
-        note.setTextColor(Color.DKGRAY);
-        root.addView(note, lpTop(14));
+        page.addView(buildHeader());
 
         ScrollView scroll = new ScrollView(this);
-        scroll.addView(root);
-        return scroll;
+        scroll.setFillViewport(true);
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(16), dp(14), dp(16), dp(120));
+
+        content.addView(buildWatchCard());
+        content.addView(sectionTitle("극장"), top(20));
+        content.addView(buildTheaterSelector(), top(8));
+
+        content.addView(sectionTitle("날짜"), top(22));
+        dateRow = new LinearLayout(this);
+        dateRow.setOrientation(LinearLayout.HORIZONTAL);
+        HorizontalScrollView dateScroll = new HorizontalScrollView(this);
+        dateScroll.setHorizontalScrollBarEnabled(false);
+        dateScroll.addView(dateRow);
+        content.addView(dateScroll, top(8));
+
+        LinearLayout movieHeader = new LinearLayout(this);
+        movieHeader.setOrientation(LinearLayout.HORIZONTAL);
+        movieHeader.setGravity(Gravity.CENTER_VERTICAL);
+        TextView mh = sectionTitle("영화 · 상영시간");
+        movieHeader.addView(mh, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        refreshButton = smallButton("새로고침");
+        refreshButton.setOnClickListener(v -> loadSchedule(true));
+        movieHeader.addView(refreshButton);
+        content.addView(movieHeader, top(22));
+
+        emptyHint = text("극장을 선택하면 현재 상영 중인 영화와 시간을 불러올게.", 14, false, SUB);
+        emptyHint.setPadding(0, dp(22), 0, dp(22));
+        content.addView(emptyHint);
+
+        movieList = new LinearLayout(this);
+        movieList.setOrientation(LinearLayout.VERTICAL);
+        content.addView(movieList);
+
+        content.addView(buildLegend(), top(18));
+        scroll.addView(content);
+        page.addView(scroll, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        page.addView(buildBottomBar());
+        return page;
     }
 
-    private void loadShowtimes(Button button) {
-        if (!saveTarget()) return;
-        button.setEnabled(false);
-        button.setText("상영시간 불러오는 중...");
+    private View buildHeader() {
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(18), dp(14), dp(10), dp(14));
+        header.setBackgroundColor(Color.WHITE);
 
-        String tn = prefs.getTheaterName();
-        String sn = prefs.getSiteNo();
-        String mk = prefs.getMovieKeyword();
-        String fk = prefs.getFormatKeyword();
+        TextView logo = text("CGV WATCH", 22, true, RED);
+        header.addView(logo, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
-        loader.execute(() -> {
-            ArrayList<CgvClient.Showtime> all = new ArrayList<>();
-            Exception last = null;
-            try {
-                CgvClient client = new CgvClient(tn, sn, mk, fk);
-                LocalDate today = DateUtil.today();
-                for (int i = 0; i < 8; i++) {
-                    try {
-                        all.addAll(client.fetchMatches(DateUtil.ymd(today.plusDays(i))));
-                    } catch (Exception e) {
-                        last = e;
-                    }
-                    Thread.sleep(180);
-                }
-            } catch (Exception e) {
-                last = e;
-            }
+        Button cgv = flatButton("CGV 열기");
+        cgv.setOnClickListener(v -> openCgv());
+        header.addView(cgv);
 
-            Exception error = last;
-            runOnUiThread(() -> {
-                button.setEnabled(true);
-                button.setText("영화/상영시간 불러와서 선택");
-                if (all.isEmpty()) {
-                    showResult("회차를 못 불러왔어", error == null
-                            ? "해당 극장/필터에 맞는 상영 회차가 없어."
-                            : "CGV 조회 실패: " + clean(error.getMessage()));
-                } else {
-                    showShowtimePicker(all);
-                }
-            });
-        });
+        Button settings = flatButton("설정");
+        settings.setOnClickListener(v -> showSettings());
+        header.addView(settings);
+        return header;
     }
 
-    private void showShowtimePicker(List<CgvClient.Showtime> source) {
-        LinkedHashMap<String, CgvClient.Showtime> unique = new LinkedHashMap<>();
-        for (CgvClient.Showtime s : source) unique.put(s.key(), s);
-        ArrayList<CgvClient.Showtime> shows = new ArrayList<>(unique.values());
+    private View buildWatchCard() {
+        LinearLayout card = card();
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
 
-        String[] display = new String[shows.size()];
-        boolean[] checked = new boolean[shows.size()];
-        Set<String> current = prefs.getSelectedShowtimeKeys();
-        for (int i = 0; i < shows.size(); i++) {
-            CgvClient.Showtime s = shows.get(i);
-            String seats = s.freeSeats >= 0 ? " · 잔여 " + s.freeSeats + "석" : "";
-            display[i] = s.title + "\n" + DateUtil.pretty(s.date) + " " + s.time + " · " + s.hall + seats;
-            checked[i] = current.contains(s.key());
+        TextView title = text("내 감시", 18, true, TEXT);
+        row.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        statusPill = text("정지", 12, true, SUB);
+        statusPill.setGravity(Gravity.CENTER);
+        statusPill.setPadding(dp(11), dp(5), dp(11), dp(5));
+        row.addView(statusPill);
+        card.addView(row);
+
+        selectedCount = text("선택한 회차 0개", 24, true, TEXT);
+        card.addView(selectedCount, top(12));
+
+        selectedPreview = text("시간표에서 원하는 회차를 눌러 선택해.", 13, false, SUB);
+        selectedPreview.setLineSpacing(dp(2), 1f);
+        card.addView(selectedPreview, top(5));
+
+        statusDetail = text("", 12, false, SUB);
+        card.addView(statusDetail, top(12));
+        return card;
+    }
+
+    private View buildTheaterSelector() {
+        LinearLayout card = card();
+        theaterSpinner = new Spinner(this);
+        ArrayList<String> names = new ArrayList<>();
+        int selected = 0;
+        for (int i = 0; i < THEATERS.length; i++) {
+            names.add("CGV " + THEATERS[i][0]);
+            if (THEATERS[i][1].equals(prefs.getSiteNo())) selected = i;
         }
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_dropdown_item, names);
+        theaterSpinner.setAdapter(adapter);
+        theaterSpinner.setSelection(selected);
+        theaterSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            boolean first = true;
+            @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) {
+                if (first) { first = false; return; }
+                if (position == THEATERS.length - 1) {
+                    showCustomTheaterDialog();
+                    return;
+                }
+                applyTheater(THEATERS[position][0], THEATERS[position][1]);
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) {}
+        });
+        card.addView(theaterSpinner);
 
-        new AlertDialog.Builder(this)
-                .setTitle("알림 받을 회차 선택")
-                .setMultiChoiceItems(display, checked, (dialog, which, isChecked) -> checked[which] = isChecked)
-                .setPositiveButton("선택 저장", (dialog, which) -> {
-                    HashSet<String> keys = new HashSet<>();
-                    HashSet<String> labels = new HashSet<>();
-                    for (int i = 0; i < shows.size(); i++) {
-                        if (!checked[i]) continue;
-                        CgvClient.Showtime s = shows.get(i);
-                        keys.add(s.key());
-                        labels.add(DateUtil.pretty(s.date) + " · " + s.title + " · " + s.time + " · " + s.hall);
-                    }
-                    prefs.setSelectedShowtimes(keys, labels);
+        TextView guide = text("극장만 고르면 영화/시간은 자동으로 불러와.", 12, false, SUB);
+        card.addView(guide, top(6));
+        return card;
+    }
+
+    private View buildLegend() {
+        LinearLayout box = card();
+        TextView title = text("알림 방식", 15, true, TEXT);
+        box.addView(title);
+        TextView t = text("🚨 새 날짜 오픈  ·  🎟 취소표  ·  🔥 매진 회차 좌석 발생\n선택한 회차만 좌석 변화를 추적하고, 선택한 영화의 새 날짜도 계속 확인해.", 13, false, SUB);
+        t.setLineSpacing(dp(3), 1f);
+        box.addView(t, top(7));
+        return box;
+    }
+
+    private View buildBottomBar() {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setPadding(dp(16), dp(10), dp(16), dp(14));
+        bar.setBackgroundColor(Color.WHITE);
+
+        Button clear = outlinedButton("선택 해제");
+        clear.setOnClickListener(v -> new AlertDialog.Builder(this)
+                .setTitle("선택한 회차를 모두 해제할까?")
+                .setPositiveButton("해제", (d, w) -> {
+                    prefs.clearSelectedShowtimes();
+                    prefs.resetBaseline();
+                    renderMovies();
                     refreshStatus();
-                    toast(keys.isEmpty() ? "선택한 회차가 없어." : keys.size() + "개 회차를 감시 대상으로 저장했어.");
+                })
+                .setNegativeButton("취소", null).show());
+        bar.addView(clear, new LinearLayout.LayoutParams(dp(104), dp(54)));
+
+        startStop = redButton("감시 시작");
+        startStop.setOnClickListener(v -> toggleWatch());
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(0, dp(54), 1f);
+        slp.leftMargin = dp(10);
+        bar.addView(startStop, slp);
+        return bar;
+    }
+
+    private void applyTheater(String name, String siteNo) {
+        if (siteNo.equals(prefs.getSiteNo()) && name.equals(prefs.getTheaterName())) return;
+        if (prefs.isWatching()) stopWatchService();
+        prefs.setTarget(name, siteNo, "", "");
+        showsByDate.clear();
+        currentDate = "";
+        loadSchedule(false);
+    }
+
+    private void showCustomTheaterDialog() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(4), dp(20), 0);
+        EditText name = input("극장명", false);
+        EditText code = input("극장 코드 4자리", false);
+        code.setInputType(InputType.TYPE_CLASS_NUMBER);
+        box.addView(name);
+        box.addView(code, top(6));
+        new AlertDialog.Builder(this)
+                .setTitle("CGV 직접 입력")
+                .setView(box)
+                .setPositiveButton("적용", (d, w) -> {
+                    String n = name.getText().toString().trim();
+                    String c = code.getText().toString().trim();
+                    if (n.isEmpty() || !c.matches("\\d{4}")) {
+                        toast("극장명과 4자리 코드를 정확히 입력해줘.");
+                        return;
+                    }
+                    applyTheater(n, c);
                 })
                 .setNegativeButton("취소", null)
                 .show();
     }
 
-    private boolean saveTarget() {
-        String tn = theaterName.getText().toString().trim();
-        String sn = siteNo.getText().toString().trim();
-        String mk = movieKeyword.getText().toString().trim();
-        String fk = formatKeyword.getText().toString().trim();
-        if (tn.isEmpty()) {
-            toast("CGV 극장명을 입력해줘.");
-            return false;
+    private void loadSchedule(boolean manual) {
+        if (loading) return;
+        loading = true;
+        refreshButtonSafe(false, "불러오는 중…");
+        emptyHint.setVisibility(View.VISIBLE);
+        emptyHint.setText("CGV 시간표 불러오는 중…");
+        movieList.removeAllViews();
+
+        final String theater = prefs.getTheaterName();
+        final String site = prefs.getSiteNo();
+        loader.execute(() -> {
+            Map<String, List<CgvClient.Showtime>> result = new LinkedHashMap<>();
+            Exception last = null;
+            CgvClient client = new CgvClient(theater, site, "", "");
+            LocalDate today = DateUtil.today();
+            for (int i = 0; i < 8; i++) {
+                String date = DateUtil.ymd(today.plusDays(i));
+                try {
+                    List<CgvClient.Showtime> list = client.fetchMatches(date);
+                    result.put(date, dedupe(list));
+                } catch (Exception e) {
+                    last = e;
+                    result.put(date, new ArrayList<>());
+                }
+                try { Thread.sleep(160); } catch (InterruptedException ignored) { break; }
+            }
+            Exception error = last;
+            runOnUiThread(() -> {
+                loading = false;
+                refreshButtonSafe(true, "새로고침");
+                showsByDate.clear();
+                showsByDate.putAll(result);
+                if (currentDate.isEmpty() || !showsByDate.containsKey(currentDate)) {
+                    currentDate = firstDateWithShows(result);
+                    if (currentDate.isEmpty()) currentDate = DateUtil.ymd(DateUtil.today());
+                }
+                renderDates();
+                renderMovies();
+                if (allEmpty(result)) {
+                    emptyHint.setVisibility(View.VISIBLE);
+                    emptyHint.setText(error == null
+                            ? "현재 불러올 수 있는 상영시간이 없어."
+                            : "시간표를 못 불러왔어. 잠시 뒤 새로고침해줘.\n" + clean(error.getMessage()));
+                } else if (manual) {
+                    toast("최신 시간표로 갱신했어.");
+                }
+            });
+        });
+    }
+
+    private List<CgvClient.Showtime> dedupe(List<CgvClient.Showtime> source) {
+        LinkedHashMap<String, CgvClient.Showtime> map = new LinkedHashMap<>();
+        for (CgvClient.Showtime s : source) map.put(s.key(), s);
+        ArrayList<CgvClient.Showtime> out = new ArrayList<>(map.values());
+        Collections.sort(out, Comparator.comparing((CgvClient.Showtime s) -> s.title)
+                .thenComparing(s -> s.time));
+        return out;
+    }
+
+    private void renderDates() {
+        dateRow.removeAllViews();
+        LocalDate today = DateUtil.today();
+        DateTimeFormatter day = DateTimeFormatter.ofPattern("M/d", Locale.KOREA);
+        DateTimeFormatter dow = DateTimeFormatter.ofPattern("E", Locale.KOREA);
+        for (int i = 0; i < 8; i++) {
+            LocalDate d = today.plusDays(i);
+            String key = DateUtil.ymd(d);
+            boolean active = key.equals(currentDate);
+            int count = showsByDate.containsKey(key) ? showsByDate.get(key).size() : 0;
+
+            TextView chip = text((i == 0 ? "오늘\n" : dow.format(d) + "\n") + day.format(d), 13, active, active ? Color.WHITE : TEXT);
+            chip.setGravity(Gravity.CENTER);
+            chip.setMinWidth(dp(64));
+            chip.setPadding(dp(10), dp(9), dp(10), dp(9));
+            chip.setBackground(roundBg(active ? RED : Color.WHITE, dp(14), active ? RED : BORDER, 1));
+            chip.setAlpha(count == 0 ? 0.55f : 1f);
+            chip.setOnClickListener(v -> {
+                currentDate = key;
+                renderDates();
+                renderMovies();
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(66), dp(62));
+            lp.rightMargin = dp(8);
+            dateRow.addView(chip, lp);
         }
-        if (!sn.matches("\\d{4}")) {
-            toast("극장 코드는 4자리 숫자로 입력해줘. 예: 용산 0013");
-            return false;
+    }
+
+    private void renderMovies() {
+        movieList.removeAllViews();
+        List<CgvClient.Showtime> list = showsByDate.get(currentDate);
+        if (list == null || list.isEmpty()) {
+            emptyHint.setVisibility(View.VISIBLE);
+            emptyHint.setText("이 날짜에는 불러온 상영 회차가 없어.");
+            return;
         }
-        prefs.setTarget(tn, sn, mk, fk);
-        return true;
+        emptyHint.setVisibility(View.GONE);
+
+        LinkedHashMap<String, List<CgvClient.Showtime>> byMovie = new LinkedHashMap<>();
+        for (CgvClient.Showtime s : list) {
+            byMovie.computeIfAbsent(s.title, k -> new ArrayList<>()).add(s);
+        }
+        for (Map.Entry<String, List<CgvClient.Showtime>> entry : byMovie.entrySet()) {
+            movieList.addView(movieCard(entry.getKey(), entry.getValue()), top(10));
+        }
+    }
+
+    private View movieCard(String title, List<CgvClient.Showtime> shows) {
+        LinearLayout card = card();
+        TextView movieTitle = text(title, 18, true, TEXT);
+        card.addView(movieTitle);
+
+        String hallSummary = buildHallSummary(shows);
+        TextView halls = text(hallSummary, 12, false, SUB);
+        card.addView(halls, top(4));
+
+        LinearLayout times = new LinearLayout(this);
+        times.setOrientation(LinearLayout.VERTICAL);
+        card.addView(times, top(10));
+
+        int index = 0;
+        while (index < shows.size()) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            for (int col = 0; col < 3; col++) {
+                if (index >= shows.size()) {
+                    View spacer = new View(this);
+                    LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(0, dp(1), 1f);
+                    if (col > 0) sp.leftMargin = dp(7);
+                    row.addView(sp, sp);
+                    continue;
+                }
+                CgvClient.Showtime s = shows.get(index++);
+                boolean selected = prefs.getSelectedShowtimeKeys().contains(s.key());
+                TextView b = showtimeButton(s, selected);
+                LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(0, dp(58), 1f);
+                if (col > 0) bp.leftMargin = dp(7);
+                row.addView(b, bp);
+            }
+            times.addView(row, times.getChildCount() == 0 ? new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT) : top(7));
+        }
+        return card;
+    }
+
+    private TextView showtimeButton(CgvClient.Showtime s, boolean selected) {
+        String seats = s.freeSeats >= 0 ? "\n" + s.freeSeats + "석" : "";
+        TextView b = text(s.time + seats, 14, true, selected ? Color.WHITE : TEXT);
+        b.setGravity(Gravity.CENTER);
+        b.setBackground(roundBg(selected ? RED : Color.WHITE, dp(10), selected ? RED : BORDER, 1));
+        b.setOnClickListener(v -> toggleShowtime(s));
+        return b;
+    }
+
+    private void toggleShowtime(CgvClient.Showtime s) {
+        Set<String> keys = prefs.getSelectedShowtimeKeys();
+        Set<String> labels = prefs.getSelectedShowtimeLabels();
+        String label = DateUtil.pretty(s.date) + " · " + s.title + " · " + s.time + " · " + s.hall;
+        if (keys.contains(s.key())) {
+            keys.remove(s.key());
+            labels.remove(label);
+        } else {
+            keys.add(s.key());
+            labels.add(label);
+        }
+        prefs.setSelectedShowtimes(keys, labels);
+        renderMovies();
+        refreshStatus();
+    }
+
+    private String buildHallSummary(List<CgvClient.Showtime> shows) {
+        ArrayList<String> halls = new ArrayList<>();
+        for (CgvClient.Showtime s : shows) {
+            if (s.hall != null && !s.hall.isEmpty() && !halls.contains(s.hall)) halls.add(s.hall);
+            if (halls.size() >= 3) break;
+        }
+        return halls.isEmpty() ? "상영관 정보 없음" : android.text.TextUtils.join(" · ", halls);
     }
 
     private void toggleWatch() {
         if (prefs.isWatching()) {
-            Intent i = new Intent(this, WatchService.class);
-            i.setAction(WatchService.ACTION_STOP);
-            startService(i);
-            prefs.setWatching(false);
-            refreshStatus();
+            stopWatchService();
             return;
         }
-
-        if (!saveTarget()) return;
-        int seconds = interval.getSelectedItemPosition() == 2 ? 120
-                : interval.getSelectedItemPosition() == 1 ? 60 : 30;
-        prefs.setIntervalSeconds(seconds);
-
         if (!prefs.hasSelectedShowtimes()) {
             new AlertDialog.Builder(this)
-                    .setTitle("선택한 회차가 없어")
-                    .setMessage("이대로 시작하면 예전 방식처럼 입력한 영화/상영관 전체를 감시해서 알림이 많이 올 수 있어. 먼저 원하는 회차를 선택하는 걸 추천해.")
-                    .setPositiveButton("그래도 시작", (d, w) -> confirmKakaoAndStart())
-                    .setNegativeButton("취소", null)
-                    .show();
+                    .setTitle("먼저 시간을 선택해줘")
+                    .setMessage("영화 시간표에서 알림 받을 회차를 하나 이상 눌러줘.")
+                    .setPositiveButton("확인", null).show();
             return;
         }
-        confirmKakaoAndStart();
-    }
-
-    private void confirmKakaoAndStart() {
         if (!kakao.hasRefreshToken()) {
             new AlertDialog.Builder(this)
-                    .setTitle("카카오 로그인이 아직 안 됐어")
-                    .setMessage("감시는 시작할 수 있지만 카톡은 안 오고 폰 알림만 와. 그래도 시작할까?")
+                    .setTitle("카카오는 아직 연결 안 됐어")
+                    .setMessage("폰 알림은 정상적으로 받을 수 있어. 그대로 감시를 시작할까?")
                     .setPositiveButton("시작", (d, w) -> startWatchService())
-                    .setNegativeButton("취소", null)
-                    .show();
-        } else {
-            startWatchService();
-        }
+                    .setNegativeButton("취소", null).show();
+        } else startWatchService();
     }
 
     private void startWatchService() {
@@ -365,30 +502,137 @@ public final class MainActivity extends Activity {
         i.setAction(WatchService.ACTION_START);
         startForegroundService(i);
         prefs.setWatching(true);
-        toast("감시 시작. 선택한 회차만 확인할게.");
+        refreshStatus();
+        toast("감시 시작했어.");
+    }
+
+    private void stopWatchService() {
+        Intent i = new Intent(this, WatchService.class);
+        i.setAction(WatchService.ACTION_STOP);
+        startService(i);
+        prefs.setWatching(false);
         refreshStatus();
     }
 
     private void refreshStatus() {
-        if (status == null) return;
+        if (statusPill == null) return;
         boolean watching = prefs.isWatching();
-        status.setText(watching ? "● 감시 중" : "○ 정지됨");
-        status.setTextColor(watching ? Color.rgb(0, 128, 65) : Color.DKGRAY);
+        statusPill.setText(watching ? "● 감시 중" : "정지");
+        statusPill.setTextColor(watching ? Color.WHITE : SUB);
+        statusPill.setBackground(roundBg(watching ? RED : Color.rgb(238,238,238), dp(20), Color.TRANSPARENT, 0));
 
-        String latest = prefs.getLatestDate();
-        String latestPretty = "-";
-        if (latest != null && !latest.isEmpty()) {
-            try { latestPretty = DateUtil.pretty(latest); } catch (Exception ignored) {}
-        }
-
-        detail.setText(prefs.getStatus()
-                + "\n극장: " + prefs.getTheaterName()
-                + "\n마지막 확인: " + prefs.getLastChecked()
-                + "\n확인 기준일: " + latestPretty
-                + "\n카카오: " + (kakao.hasRefreshToken() ? "연결됨" : "로그인 필요")
-                + "\n간격: " + prefs.getIntervalSeconds() + "초");
-        selectedSummary.setText(prefs.selectedShowtimesSummary());
+        int count = prefs.getSelectedShowtimeKeys().size();
+        selectedCount.setText("선택한 회차 " + count + "개");
+        selectedPreview.setText(compactSelectionPreview());
+        statusDetail.setText("마지막 확인  " + prefs.getLastChecked()
+                + "  ·  " + prefs.getIntervalSeconds() + "초 간격"
+                + (kakao.hasRefreshToken() ? "  ·  카카오 연결됨" : ""));
         startStop.setText(watching ? "감시 중지" : "감시 시작");
+        startStop.setBackground(roundBg(watching ? Color.rgb(50,50,50) : RED, dp(13), Color.TRANSPARENT, 0));
+    }
+
+    private String compactSelectionPreview() {
+        ArrayList<String> labels = new ArrayList<>(prefs.getSelectedShowtimeLabels());
+        Collections.sort(labels);
+        if (labels.isEmpty()) return "시간표에서 원하는 회차를 눌러 선택해.";
+        StringBuilder sb = new StringBuilder();
+        int limit = Math.min(4, labels.size());
+        for (int i = 0; i < limit; i++) {
+            if (i > 0) sb.append("\n");
+            sb.append("• ").append(labels.get(i));
+        }
+        if (labels.size() > limit) sb.append("\n외 ").append(labels.size() - limit).append("개");
+        return sb.toString();
+    }
+
+    private void showSettings() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(4), dp(20), 0);
+
+        TextView kakaoTitle = text("카카오 알림", 16, true, TEXT);
+        box.addView(kakaoTitle);
+        EditText rest = input("Kakao REST API 키", false);
+        rest.setText(kakao.getRestKey());
+        box.addView(rest, top(6));
+        EditText secret = input("Kakao Client Secret", true);
+        secret.setText(kakao.getClientSecret());
+        box.addView(secret, top(6));
+
+        LinearLayout kakaoButtons = new LinearLayout(this);
+        kakaoButtons.setOrientation(LinearLayout.HORIZONTAL);
+        Button login = outlinedButton(kakao.hasRefreshToken() ? "카카오 재로그인" : "카카오 로그인");
+        Button test = outlinedButton("테스트");
+        kakaoButtons.addView(login, new LinearLayout.LayoutParams(0, dp(48), 1f));
+        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(0, dp(48), 1f);
+        tp.leftMargin = dp(8);
+        kakaoButtons.addView(test, tp);
+        box.addView(kakaoButtons, top(8));
+
+        TextView intervalTitle = text("감시 간격", 16, true, TEXT);
+        box.addView(intervalTitle, top(18));
+        Spinner interval = new Spinner(this);
+        String[] intervals = {"30초", "1분", "2분"};
+        interval.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, intervals));
+        interval.setSelection(prefs.getIntervalSeconds() == 120 ? 2 : prefs.getIntervalSeconds() == 60 ? 1 : 0);
+        box.addView(interval, top(4));
+
+        CheckBox auto = new CheckBox(this);
+        auto.setText("재부팅 후 자동 감시 재시작");
+        auto.setChecked(prefs.isAutoRestart());
+        box.addView(auto, top(8));
+
+        Button battery = outlinedButton("배터리 최적화 제외 설정");
+        battery.setOnClickListener(v -> requestBatteryExemption());
+        box.addView(battery, top(8));
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("설정")
+                .setView(box)
+                .setPositiveButton("저장", null)
+                .setNegativeButton("닫기", null)
+                .create();
+        dialog.setOnShowListener(x -> {
+            login.setOnClickListener(v -> {
+                kakao.saveAppKeys(rest.getText().toString(), secret.getText().toString());
+                kakao.login(this, (ok, msg) -> runOnUiThread(() -> showResult(ok ? "카카오 연결 완료" : "카카오 연결 실패", msg)));
+            });
+            test.setOnClickListener(v -> {
+                kakao.saveAppKeys(rest.getText().toString(), secret.getText().toString());
+                kakao.sendTestAsync(this, (ok, msg) -> runOnUiThread(() -> showResult(ok ? "테스트 성공" : "테스트 실패", msg)));
+            });
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                kakao.saveAppKeys(rest.getText().toString(), secret.getText().toString());
+                prefs.setIntervalSeconds(interval.getSelectedItemPosition() == 2 ? 120 : interval.getSelectedItemPosition() == 1 ? 60 : 30);
+                prefs.setAutoRestart(auto.isChecked());
+                refreshStatus();
+                dialog.dismiss();
+            });
+        });
+        dialog.show();
+    }
+
+    private void openCgv() {
+        startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(
+                CgvClient.bookingUrl(prefs.getTheaterName(), prefs.getSiteNo()))));
+    }
+
+    private String firstDateWithShows(Map<String, List<CgvClient.Showtime>> data) {
+        for (Map.Entry<String, List<CgvClient.Showtime>> e : data.entrySet()) {
+            if (e.getValue() != null && !e.getValue().isEmpty()) return e.getKey();
+        }
+        return "";
+    }
+
+    private boolean allEmpty(Map<String, List<CgvClient.Showtime>> data) {
+        for (List<CgvClient.Showtime> list : data.values()) if (list != null && !list.isEmpty()) return false;
+        return true;
+    }
+
+    private void refreshButtonSafe(boolean enabled, String label) {
+        if (refreshButton == null) return;
+        refreshButton.setEnabled(enabled);
+        refreshButton.setText(label);
     }
 
     private void requestNotificationPermission() {
@@ -416,25 +660,18 @@ public final class MainActivity extends Activity {
     private LinearLayout card() {
         LinearLayout l = new LinearLayout(this);
         l.setOrientation(LinearLayout.VERTICAL);
-        l.setPadding(dp(16), dp(16), dp(16), dp(16));
-        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
-        bg.setColor(Color.WHITE);
-        bg.setCornerRadius(dp(16));
-        l.setBackground(bg);
+        l.setPadding(dp(16), dp(15), dp(16), dp(15));
+        l.setBackground(roundBg(Color.WHITE, dp(16), BORDER, 1));
         return l;
     }
 
-    private TextView section(String s) {
-        TextView t = text(s, 18, true);
-        t.setTextColor(Color.rgb(25, 25, 25));
-        return t;
-    }
+    private TextView sectionTitle(String s) { return text(s, 17, true, TEXT); }
 
-    private TextView text(String s, int sp, boolean bold) {
+    private TextView text(String s, int sp, boolean bold, int color) {
         TextView t = new TextView(this);
         t.setText(s);
         t.setTextSize(sp);
-        t.setTextColor(Color.BLACK);
+        t.setTextColor(color);
         if (bold) t.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         return t;
     }
@@ -443,23 +680,64 @@ public final class MainActivity extends Activity {
         EditText e = new EditText(this);
         e.setHint(hint);
         e.setSingleLine(true);
-        e.setPadding(dp(12), dp(10), dp(12), dp(10));
+        e.setPadding(dp(12), dp(9), dp(12), dp(9));
         if (password) e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         return e;
     }
 
-    private Button button(String s) {
+    private Button redButton(String s) {
         Button b = new Button(this);
         b.setText(s);
+        b.setTextColor(Color.WHITE);
+        b.setTextSize(16);
+        b.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         b.setAllCaps(false);
-        b.setMinHeight(dp(50));
+        b.setBackground(roundBg(RED, dp(13), Color.TRANSPARENT, 0));
         return b;
     }
 
-    private LinearLayout.LayoutParams lpTop(int topDp) {
+    private Button outlinedButton(String s) {
+        Button b = new Button(this);
+        b.setText(s);
+        b.setTextColor(TEXT);
+        b.setTextSize(14);
+        b.setAllCaps(false);
+        b.setBackground(roundBg(Color.WHITE, dp(12), BORDER, 1));
+        return b;
+    }
+
+    private Button smallButton(String s) {
+        Button b = outlinedButton(s);
+        b.setMinHeight(0);
+        b.setMinimumHeight(0);
+        b.setPadding(dp(11), dp(4), dp(11), dp(4));
+        return b;
+    }
+
+    private Button flatButton(String s) {
+        Button b = new Button(this);
+        b.setText(s);
+        b.setTextColor(TEXT);
+        b.setTextSize(13);
+        b.setAllCaps(false);
+        b.setBackgroundColor(Color.TRANSPARENT);
+        b.setMinWidth(0);
+        b.setMinimumWidth(0);
+        return b;
+    }
+
+    private GradientDrawable roundBg(int fill, int radius, int stroke, int strokeDp) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(fill);
+        g.setCornerRadius(radius);
+        if (strokeDp > 0) g.setStroke(dp(strokeDp), stroke);
+        return g;
+    }
+
+    private LinearLayout.LayoutParams top(int dpTop) {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dp(topDp);
+        lp.topMargin = dp(dpTop);
         return lp;
     }
 
