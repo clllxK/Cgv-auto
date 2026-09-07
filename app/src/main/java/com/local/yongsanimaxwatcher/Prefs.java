@@ -23,11 +23,12 @@ public final class Prefs {
     public boolean hasAnyWatch(){return hasSelectedShowtimes()||!getNewDateMovies().isEmpty();}
     public List<String> getSelectedDates(){HashSet<String>d=new HashSet<>();for(String k:getSelectedShowtimeKeys()){int i=k.indexOf('|');if(i>0)d.add(k.substring(0,i));}ArrayList<String>o=new ArrayList<>(d);Collections.sort(o);return o;}
     public String getLatestDate(){return p.getString("latest_date","");} public void setLatestDate(String v){p.edit().putString("latest_date",v==null?"":v).apply();}
+    public int getDateOpenState(String date){return p.getInt("date_open_"+date,-1);} public void setDateOpenState(String date,boolean open){p.edit().putInt("date_open_"+date,open?1:0).apply();}
     public int getSeatCount(String k){return p.getInt("seat_"+k,Integer.MIN_VALUE);} public void setSeatCount(String k,int v){p.edit().putInt("seat_"+k,v).apply();}
     public String getLastChecked(){return p.getString("last_checked","-");} public void setLastChecked(String v){p.edit().putString("last_checked",v).apply();} public String getStatus(){return p.getString("status","정지됨");} public void setStatus(String v){p.edit().putString("status",v).apply();}
     public boolean isWatching(){return p.getBoolean("watching",false);} public void setWatching(boolean v){p.edit().putBoolean("watching",v).apply();} public boolean isAutoRestart(){return p.getBoolean("auto_restart",true);} public void setAutoRestart(boolean v){p.edit().putBoolean("auto_restart",v).apply();}
     public int getConsecutiveErrors(){return p.getInt("consecutive_errors",0);} public void setConsecutiveErrors(int v){p.edit().putInt("consecutive_errors",v).apply();}
     public String targetLabel(){String m=getNewDateMovies().isEmpty()?getUiMovie():android.text.TextUtils.join(",",getNewDateMovies());return getTheaterName()+" · "+m+" · "+getFormatKeyword();}
-    public void resetBaseline(){SharedPreferences.Editor e=p.edit().remove("latest_date");for(String k:p.getAll().keySet())if(k.startsWith("seat_"))e.remove(k);e.apply();}
+    public void resetBaseline(){SharedPreferences.Editor e=p.edit().remove("latest_date");for(String k:p.getAll().keySet())if(k.startsWith("seat_")||k.startsWith("date_open_"))e.remove(k);e.apply();}
     private static String clean(String s){return s==null?"":s.trim();}
 }
