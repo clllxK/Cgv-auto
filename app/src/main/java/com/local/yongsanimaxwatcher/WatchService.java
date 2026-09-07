@@ -9,6 +9,7 @@ import android.os.PowerManager;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -27,6 +28,7 @@ public final class WatchService extends Service {
 
     private final int[] offsetPattern = {0, 1, 0, 2, 0, 3, 1, 4, 0, 5, 1, 6, 2, 7};
     private int patternIndex = 0;
+    private int selectedDateIndex = 0;
 
     @Override
     public void onCreate() {
@@ -52,7 +54,12 @@ public final class WatchService extends Service {
         if (running.compareAndSet(false, true)) {
             prefs.setWatching(true);
             prefs.setStatus("시작 중...");
-            cgv = new CgvClient(prefs.getTheaterName(), prefs.getSiteNo(), prefs.getMovieKeyword(), prefs.getFormatKeyword());
+            boolean selected = prefs.hasSelectedShowtimes();
+            cgv = new CgvClient(
+                    prefs.getTheaterName(),
+                    prefs.getSiteNo(),
+                    selected ? "" : prefs.getMovieKeyword(),
+                    selected ? "" : prefs.getFormatKeyword());
             if (!wakeLock.isHeld()) wakeLock.acquire();
             executor.execute(this::runLoop);
         }
@@ -91,7 +98,32 @@ public final class WatchService extends Service {
 
     private void initializeBaseline() throws Exception {
         prefs.setStatus("현재 일정/좌석 기준 만드는 중...");
-        notifications.updateForeground(notifications.foreground("첫 실행: 현재 일정과 좌석 기준 확인 중"));
+        notifications.updateForeground(notifications.foreground("첫 실행: 현재 좌석 기준 확인 중"));
+
+        if (prefs.hasSelectedShowtimes()) {
+            List<String> dates = prefs.getSelectedDates();
+            if (dates.isEmpty()) throw new IllegalStateException("선택된 상영 회차가 없어.");
+            int success = 0;
+            Exception last = null;
+            for (String date : dates) {
+                if (!running.get()) break;
+                try {
+                    List<CgvClient.Showtime> matches = cgv.fetchMatches(date);
+                    snapshot(matches);
+                    success++;
+                } catch (Exception e) {
+                    last = e;
+                }
+                Thread.sleep(300);
+            }
+            if (success == 0) {
+                throw new IllegalStateException("선택한 회차 조회에 실패했어. " + (last == null ? "" : shortMsg(last)));
+            }
+            prefs.setLatestDate(dates.get(dates.size() - 1));
+            prefs.setStatus("선택 회차 " + prefs.getSelectedShowtimeKeys().size() + "개 기준 설정 완료");
+            notifications.updateForeground(notifications.foreground("선택한 회차만 감시 중 · " + prefs.getTheaterName()));
+            return;
+        }
 
         LocalDate today = DateUtil.today();
         String latest = "";
@@ -122,45 +154,62 @@ public final class WatchService extends Service {
     }
 
     private void snapshot(List<CgvClient.Showtime> matches) {
+        Set<String> selected = prefs.getSelectedShowtimeKeys();
         for (CgvClient.Showtime s : matches) {
+            if (!selected.isEmpty() && !selected.contains(s.key())) continue;
             if (s.freeSeats >= 0) prefs.setSeatCount(s.key(), s.freeSeats);
         }
     }
 
     private void checkOneDate() {
         try {
-            String latestText = prefs.getLatestDate();
-            LocalDate latest = latestText.isEmpty() ? DateUtil.today() : DateUtil.parseYmd(latestText);
-            LocalDate today = DateUtil.today();
-
-            int offset = offsetPattern[patternIndex++ % offsetPattern.length];
+            boolean selectedMode = prefs.hasSelectedShowtimes();
+            String date;
             LocalDate candidate;
-            if (offset <= 2) candidate = today.plusDays(offset);
-            else {
-                LocalDate floor = latest.isBefore(today) ? today : latest;
-                candidate = floor.plusDays(offset - 2L);
+            LocalDate latest;
+
+            if (selectedMode) {
+                List<String> dates = prefs.getSelectedDates();
+                if (dates.isEmpty()) throw new IllegalStateException("선택된 회차가 없어.");
+                date = dates.get(selectedDateIndex++ % dates.size());
+                candidate = DateUtil.parseYmd(date);
+                latest = candidate;
+            } else {
+                String latestText = prefs.getLatestDate();
+                latest = latestText.isEmpty() ? DateUtil.today() : DateUtil.parseYmd(latestText);
+                LocalDate today = DateUtil.today();
+                int offset = offsetPattern[patternIndex++ % offsetPattern.length];
+                if (offset <= 2) candidate = today.plusDays(offset);
+                else {
+                    LocalDate floor = latest.isBefore(today) ? today : latest;
+                    candidate = floor.plusDays(offset - 2L);
+                }
+                date = DateUtil.ymd(candidate);
             }
 
-            String date = DateUtil.ymd(candidate);
             List<CgvClient.Showtime> matches = cgv.fetchMatches(date);
             prefs.setLastChecked(DateUtil.nowStamp());
             prefs.setConsecutiveErrors(0);
 
-            boolean isNewDate = !matches.isEmpty() && candidate.isAfter(latest);
+            boolean isNewDate = !selectedMode && !matches.isEmpty() && candidate.isAfter(latest);
             if (isNewDate) {
                 notifyNewDate(date, matches);
                 prefs.setLatestDate(date);
                 patternIndex = 0;
             }
 
+            Set<String> selectedKeys = prefs.getSelectedShowtimeKeys();
             for (CgvClient.Showtime s : matches) {
+                if (!selectedKeys.isEmpty() && !selectedKeys.contains(s.key())) continue;
                 if (s.freeSeats < 0) continue;
                 int old = prefs.getSeatCount(s.key());
                 if (old != Integer.MIN_VALUE && s.freeSeats > old) notifySeatIncrease(s, old, s.freeSeats);
                 prefs.setSeatCount(s.key(), s.freeSeats);
             }
 
-            String status = "정상 감시 중 · " + prefs.targetLabel() + " · 방금 " + DateUtil.pretty(date) + " 확인";
+            String status = selectedMode
+                    ? "선택 회차만 정상 감시 중 · 방금 " + DateUtil.pretty(date) + " 확인"
+                    : "정상 감시 중 · " + prefs.targetLabel() + " · 방금 " + DateUtil.pretty(date) + " 확인";
             prefs.setStatus(status);
             notifications.updateForeground(notifications.foreground(status));
         } catch (Exception e) {
@@ -181,11 +230,11 @@ public final class WatchService extends Service {
     private void notifySeatIncrease(CgvClient.Showtime s, int oldSeats, int newSeats) {
         int added = newSeats - oldSeats;
         String pretty = DateUtil.pretty(s.date);
-        String title = "🎟️ " + s.title + " 취소표/새 자리 " + added + "석!";
+        String title = "🎟️ " + s.title + " " + s.time + " 취소표 " + added + "석!";
         String body = prefs.getTheaterName() + " · " + pretty + " " + s.time + " · " + s.hall
-                + "\n잔여 " + oldSeats + " → " + newSeats + "석\n지금 바로 예매 화면을 확인해.";
+                + "\n잔여 " + oldSeats + " → " + newSeats + "석\n선택한 회차에 자리가 생겼어. 지금 확인해.";
         notifications.alert(title, body, 4000 + Math.abs(s.key().hashCode() % 4000), cgv.bookingUrl());
-        prefs.setStatus("새 자리 발견! " + s.title + " · " + pretty + " " + s.time + " · " + newSeats + "석");
+        prefs.setStatus("선택 회차 자리 발견! " + s.title + " · " + pretty + " " + s.time + " · " + newSeats + "석");
 
         try { kakao.sendMemo(title + "\n" + body); }
         catch (Exception ignored) {}
